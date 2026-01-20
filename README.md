@@ -25,4 +25,5 @@ The system is being developed incrementally, starting with a local language mode
 -Make sure python 3.11.9 is installed: Python 3.11.9 - April 2, 2024
 https://www.python.org/downloads/windows/ 
   -This is the most stable version LangChain and used in production RAG systems today
-  
+
+-Run py -m venv venv in terminal
