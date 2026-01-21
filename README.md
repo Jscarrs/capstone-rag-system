@@ -15,7 +15,7 @@ The system is being developed incrementally, starting with a local language mode
 
 ## Tech Stack
 
-- Python 3.9+
+- Python 3.11.XX
 - LangChain
 - Ollama (local LLM)
 
