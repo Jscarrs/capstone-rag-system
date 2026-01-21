@@ -20,11 +20,29 @@ The system is being developed incrementally, starting with a local language mode
 - Embeddings and vector storage
 - Full RAG pipeline
 
+## How to Run This Project (Sprint 1)
 
-## How to run
--Make sure python 3.11.9 is installed: Python 3.11.9 - April 2, 2024
-https://www.python.org/downloads/windows/ 
-  -This is the most stable version LangChain and used in production RAG systems today
--Download Ollama:
+### 1. Install Python
+Install **Python 3.11.x (64-bit)** from the official website:
+
+https://www.python.org/downloads/windows/
+
+> Python 3.11 is the most stable and widely supported version for LangChain and local LLM tooling.
+> Make sure to **check “Add Python to PATH”** during installation.
+
+Verify installation:
+```powershell
+py --version
+```
+### 2. Install Ollama
+Ollama is used to run the language model locally.
+
+Download and install Ollama from:
 https://ollama.com/download
--Run py -m venv venv in terminal
+
+After installation, restart your terminal or VS Code.
+
+Verify installation:
+```powershell
+ollama --version
+```
