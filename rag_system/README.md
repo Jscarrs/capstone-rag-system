@@ -1,63 +1,109 @@
 # RAG System - Document Question Answering
 
-A Retrieval-Augmented Generation (RAG) system that allows you to chat with your documents. Supports both OpenAI and Google Gemini.
+A Retrieval-Augmented Generation (RAG) system that allows you to chat with your documents.
+
+## Supported Providers
+
+| Component | Local (Free) | Cloud |
+|-----------|--------------|-------|
+| **LLM** | LM Studio | OpenAI, Gemini |
+| **Embeddings** | HuggingFace | OpenAI, Gemini |
+| **Vector DB** | ChromaDB | ChromaDB |
+
+---
+
+## Quick Start with LM Studio (Recommended)
+
+### 1. Start LM Studio Server
+
+1. Open LM Studio
+2. Load a model (e.g., Qwen, Llama, Mistral)
+3. Go to **Local Server** tab → **Start Server**
+
+### 2. Configure `.env`
+
+```
+LMSTUDIO_BASE_URL=http://localhost:1234/v1
+```
+
+### 3. Ingest Documents
+
+```bash
+cd rag_system
+python3 ingest.py
+```
+
+### 4. Chat with Documents
+
+```bash
+python3 rag_chatbot.py
+```
+
+---
 
 ## How It Works
 
-1. **Ingestion**: Text is split into chunks, embedded using OpenAI or Gemini embeddings, and stored in a local ChromaDB vector database
-2. **Retrieval**: When you ask a question, the system finds the most relevant chunks using similarity search
-3. **Generation**: The LLM generates an answer based on the retrieved context
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     INGESTION PHASE                         │
+├─────────────────────────────────────────────────────────────┤
+│  data/book.txt → Split into → HuggingFace → ChromaDB       │
+│                  1000-char    Embeddings    Vector DB       │
+│                  chunks       (local)       (local)         │
+└─────────────────────────────────────────────────────────────┘
 
-## Setup
+┌─────────────────────────────────────────────────────────────┐
+│                      QUERY PHASE                            │
+├─────────────────────────────────────────────────────────────┤
+│  Question → Similarity → Top 3 → Inject as → LM Studio     │
+│             Search       Chunks   Context     Response      │
+└─────────────────────────────────────────────────────────────┘
+```
 
-1. Install dependencies:
+---
+
+## Adding Documents
+
+1. Place `.txt` files in `data/` folder
+2. Delete old database: `rm -rf chroma_db`
+3. Re-ingest: `python3 ingest.py`
+
+---
+
+## Cloud Providers (Alternative)
+
+Edit `.env` to use cloud APIs instead:
+
 ```bash
-pip install -r requirements.txt
+# Remove or comment out LMSTUDIO_BASE_URL
+# LMSTUDIO_BASE_URL=http://localhost:1234/v1
+
+# Use one of these:
+OPENAI_API_KEY=sk-your-key-here
+# OR
+GOOGLE_API_KEY=your-google-key-here
 ```
 
-2. Configure your API key in `.env` (choose one):
-```
-OPENAI_API_KEY=sk-your-actual-key-here
-GOOGLE_API_KEY=your-google-api-key-here
-```
+**Note**: If switching between local and cloud embeddings, delete `chroma_db/` first (different dimensions).
 
-3. Place your text file (book, document, etc.) at:
-```
-rag_system/data/book.txt
-```
-
-4. Ingest the document (create embeddings and vector database):
-```bash
-python rag_system/ingest.py
-```
-
-This will:
-- Load your text file
-- Split it into chunks (default: 1000 characters with 200 overlap)
-- Create embeddings for each chunk (OpenAI or Gemini based on configured key)
-- Store in ChromaDB at `./rag_system/chroma_db`
-
-5. Run the RAG chatbot:
-```bash
-python rag_system/rag_chatbot.py
-```
-
-## Important Note
-
-You must use the same embedding provider for both ingestion and querying. If you ingest with OpenAI embeddings, you must query with OpenAI embeddings (and vice versa for Gemini).
+---
 
 ## Files
 
-- `ingest.py` - Script to load, chunk, embed, and store documents
-- `rag_chatbot.py` - Chatbot that queries the vector database to answer questions
-- `data/` - Place your text files here
-- `chroma_db/` - Local vector database (created after running ingest.py)
+| File | Purpose |
+|------|---------|
+| `ingest.py` | Load, chunk, embed, and store documents |
+| `rag_chatbot.py` | Query vector DB and generate answers |
+| `data/` | Place your `.txt` documents here |
+| `chroma_db/` | Vector database (auto-created) |
+
+---
 
 ## Customization
 
-In `ingest.py`, you can adjust:
+**ingest.py**:
 - `chunk_size` - Size of text chunks (default: 1000 characters)
 - `chunk_overlap` - Overlap between chunks (default: 200 characters)
 
-In `rag_chatbot.py`, you can adjust:
+**rag_chatbot.py**:
 - `k` in `search_kwargs` - Number of chunks to retrieve (default: 3)
