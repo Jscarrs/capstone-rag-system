@@ -1,8 +1,10 @@
 import os
 from dotenv import load_dotenv
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
+
+DEBUG_CHUNKS = True
 
 # Load environment variables
 load_dotenv()
@@ -79,6 +81,34 @@ def get_embeddings():
             "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
         )
 
+# Helpers
+def format_docs_with_citations(docs):
+    parts = []
+    for i, doc in enumerate(docs, 1):
+        meta = doc.metadata or {}
+        source = meta.get("source", "unknown")
+        chunk = meta.get("chunk", "unknown")
+
+        parts.append(
+            f"[{i}] Source: {source}, Chunk: {chunk}\n{doc.page_content}"
+        )
+
+    return "\n\n".join(parts)
+
+
+def build_sources(docs, preview_len=200):
+    sources = []
+    for i, doc in enumerate(docs, 1):
+        meta = doc.metadata or {}
+        sources.append({
+            "id": i,
+            "source": meta.get("source"),
+            "path": meta.get("path"),
+            "chunk": meta.get("chunk"),
+            "preview": doc.page_content[:preview_len]
+        })
+    return sources
+
 # Initialize the chat model
 llm = get_llm()
 
@@ -86,21 +116,21 @@ llm = get_llm()
 embeddings = get_embeddings()
 vectordb = Chroma(
     persist_directory="./chroma_db",
-    embedding_function=embeddings
+    embedding_function=embeddings,
+    collection_metadata={"hnsw:space": "cosine"}
 )
 
 # Create a retriever from the vector database
 retriever = vectordb.as_retriever(
-    search_type="similarity",
-    search_kwargs={"k": 3}  # Retrieve top 3 most relevant chunks
+search_type="similarity_score_threshold",
+    search_kwargs={
+        "k": 3,
+        "score_threshold": 0.3
+    }
 )
 
 # Store conversation history
 chat_history = []
-
-def format_docs(docs):
-    """Format retrieved documents into a single string."""
-    return "\n\n".join(doc.page_content for doc in docs)
 
 def chat():
     print("RAG Chatbot initialized! Type 'quit' or 'exit' to end the conversation.")
@@ -108,8 +138,10 @@ def chat():
 
     # Add system message to set context
     system_message = SystemMessage(
-        content="You are a helpful assistant that answers questions based on the provided context."
-                
+        content=("Answer ONLY using the provided context. "
+            "Cite sources like [1], [2]. "
+            "If the answer is not in the context, say you don't know."
+        )
     )
     chat_history.append(system_message)
 
@@ -125,15 +157,31 @@ def chat():
 
         # Retrieve relevant chunks from vector database
         relevant_docs = retriever.invoke(user_input)
-        context = format_docs(relevant_docs)
 
-        print(f"\n[Retrieved {len(relevant_docs)} relevant chunks from database]")
-        print("\n[CHUNKS RETRIEVED:]")
-        for i, doc in enumerate(relevant_docs, 1):
-            chunk_preview = doc.page_content
-            print(f"\n  Chunk {i}:")
-            print(f"  {chunk_preview}")
-        print("[END CHUNKS]\n")
+        if not relevant_docs:
+            print("\nBot: I don't know.\n")
+            continue
+
+        context = format_docs_with_citations(relevant_docs)
+        sources = build_sources(relevant_docs)
+
+        if DEBUG_CHUNKS:
+            print(f"\n[Retrieved {len(relevant_docs)} relevant chunks from database]")
+            print("\n[CHUNKS RETRIEVED:]")
+
+            for i, doc in enumerate(relevant_docs, 1):
+                meta = doc.metadata or {}
+                src = meta.get("source", "unknown")
+                path = meta.get("path", "unknown")
+                chunk_id = meta.get("chunk", "unknown")
+
+                print(f"\n  Chunk {i}:")
+                print(f"  Source: {src}")
+                print(f"  Path: {path}")
+                print(f"  Chunk: {chunk_id}")
+                print(f"  {doc.page_content}")
+
+            print("[END CHUNKS]\n")
 
         # Create a message with context
         contextualized_message = HumanMessage(
@@ -150,6 +198,13 @@ def chat():
         chat_history.append(response)
 
         print(f"\nBot: {response.content}\n")
+        print("References:")
+        for s in sources:
+            print(
+                f"[{s['id']}] {s['source']} "
+                f"(chunk {s['chunk']}) | {s['path']}"
+            )
+        print()
 
 if __name__ == "__main__":
     if not os.path.exists("./chroma_db"):

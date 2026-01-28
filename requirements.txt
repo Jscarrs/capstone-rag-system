@@ -4,6 +4,7 @@ langchain-google-genai>=1.0.0
 langchain-huggingface>=0.0.3
 langchain-community>=0.0.20
 langchain-core>=0.1.23
+langchain-chroma
 python-dotenv
 pydantic>=2.0.0
 chromadb
