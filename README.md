@@ -4,11 +4,11 @@ A chatbot built with LangChain that supports conversation memory and RAG (Retrie
 
 ## Supported LLM Providers
 
-| Provider | Type | Cost | API Key Required |
-|----------|------|------|------------------|
-| **LM Studio** | Local | Free | No |
-| OpenAI | Cloud | Paid | Yes |
-| Google Gemini | Cloud | Free tier / Paid | Yes |
+| Provider      | Type  | Cost             | API Key Required |
+| ------------- | ----- | ---------------- | ---------------- |
+| **LM Studio** | Local | Free             | No               |
+| OpenAI        | Cloud | Paid             | Yes              |
+| Google Gemini | Cloud | Free tier / Paid | Yes              |
 
 ---
 
@@ -40,6 +40,7 @@ cp .env.example .env
 ```
 
 Edit `.env`:
+
 ```
 LMSTUDIO_BASE_URL=http://localhost:1234/v1
 ```
@@ -68,12 +69,27 @@ python3 rag_chatbot.py # Then chat
 
 ### Usage
 
-1. Place your `.txt` files in `rag_system/data/`
-2. Ingest documents:
+### Usage
+
+1. Place your documents (`.txt`) in `rag_system/data/`
+
+2. Ingest documents  
+   (this step rebuilds the vector database):
+
+   **Single file ingestion**
+
+   ```bash
+   cd rag_system
+   python3 ingest_single_file.py
+   ```
+
+   **Multiple file ingestion**
+
    ```bash
    cd rag_system
    python3 ingest.py
    ```
+
 3. Chat with your documents:
    ```bash
    python3 rag_chatbot.py
@@ -82,6 +98,7 @@ python3 rag_chatbot.py # Then chat
 ### Example Questions
 
 Based on the sample document (Sonic story):
+
 - "What is the Chrono Core?"
 - "Who are Sonic's friends?"
 - "What happened to Eggman's fortress?"
@@ -112,7 +129,8 @@ RAG-SYSTEM/
 ├── requirements.txt
 ├── .env.example
 └── rag_system/
-    ├── ingest.py           # Document ingestion
+    ├── ingest.py             # Multi-file ingestion
+    ├── ingest_single_file.py # Single-file ingestion
     ├── rag_chatbot.py      # RAG chatbot
     ├── data/               # Place documents here
     │   └── book.txt
