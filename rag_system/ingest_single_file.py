@@ -6,9 +6,6 @@ from langchain_core.documents import Document
 # Load environment variables
 load_dotenv()
 
-DATA_DIR = "./data"
-CHROMA_DIR = "./chroma_db"
-
 def get_embeddings():
     """
     Initialize embeddings based on available configuration.
@@ -66,51 +63,57 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
 
     return chunks
 
-def ingest_all_documents(data_dir=DATA_DIR):
-    documents = []
+def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
+    """
+    Load a text file, split it into chunks, embed, and store in ChromaDB.
 
-    print(f"Scanning folder: {data_dir}")
+    Args:
+        file_path: Path to the text file
+        chunk_size: Size of each text chunk (in characters)
+        chunk_overlap: Overlap between chunks to maintain context
+    """
+    print(f"Loading document from {file_path}...")
 
-    for root, _, files in os.walk(data_dir):
-        for file in files:
-            if not file.lower().endswith((".txt")):
-                continue
+    # Load the document
+    with open(file_path, 'r', encoding='utf-8') as f:
+        text = f.read()
 
-            file_path = os.path.join(root, file)
-            print(f"Loading file: {file_path}")
+    print(f"Loaded document")
+    print(f"Total characters: {len(text)}")
 
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
+    # Split the text into chunks
+    print(f"\nSplitting text into chunks (size={chunk_size}, overlap={chunk_overlap})...")
+    text_chunks = split_text(text, chunk_size, chunk_overlap)
 
-            chunks = split_text(text)
+    # Convert to Document objects
+    documents = [Document(page_content=chunk, metadata={"source": file_path}) for chunk in text_chunks]
 
-            for i, chunk in enumerate(chunks):
-                documents.append(
-                    Document(
-                        page_content=chunk,
-                        metadata={
-                            "source": file,
-                            "path": file_path,
-                            "chunk": i
-                        }
-                    )
-                )
+    print(f"Created {len(documents)} chunks")
 
-    print(f"Total chunks created: {len(documents)}")
-
+    # Create embeddings
+    print("\nCreating embeddings...")
     embeddings = get_embeddings()
 
+    # Create and persist the vector database
+    print("Storing in ChromaDB vector database...")
     vectordb = Chroma.from_documents(
         documents=documents,
         embedding=embeddings,
-        persist_directory=CHROMA_DIR
+        persist_directory="./chroma_db"
     )
 
-    print("Ingestion complete")
+    print(f"\n✓ Successfully ingested document!")
+    print(f"✓ Vector database saved to ./rag_system/chroma_db")
+    print(f"✓ Total chunks stored: {len(documents)}")
+
     return vectordb
 
 if __name__ == "__main__":
-    if not os.path.exists(DATA_DIR):
-        print(f"Data directory not found: {DATA_DIR}")
+    # Example usage
+    file_path = "./data/book.txt"
+
+    if not os.path.exists(file_path):
+        print(f"Error: File not found at {file_path}")
+        print("Please place your text file at ./rag_system/data/book.txt")
     else:
-        ingest_all_documents(DATA_DIR)
+        ingest_document(file_path)
