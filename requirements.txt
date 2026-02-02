@@ -9,3 +9,5 @@ python-dotenv
 pydantic>=2.0.0
 chromadb
 sentence-transformers
+flask
+flask-cors

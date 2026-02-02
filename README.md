@@ -48,14 +48,16 @@ LMSTUDIO_BASE_URL=http://localhost:1234/v1
 ### Step 5: Run
 
 ```bash
-# Simple chatbot
+# Simple chatbot (CLI)
 python3 chatbot.py
 
 # RAG chatbot (chat with documents)
 cd rag_system
 python3 ingest.py      # Ingest documents first
-python3 rag_chatbot.py # Then chat
+python3 rag_chatbot.py # Start web server (default)
 ```
+
+Open http://localhost:8080 in your browser to use the web interface.
 
 ---
 
@@ -66,8 +68,6 @@ python3 rag_chatbot.py # Then chat
 1. **Ingest**: Documents are split into chunks and converted to embeddings
 2. **Retrieve**: User questions find relevant chunks via similarity search
 3. **Generate**: LLM answers based on retrieved context
-
-### Usage
 
 ### Usage
 
@@ -91,8 +91,16 @@ python3 rag_chatbot.py # Then chat
    ```
 
 3. Chat with your documents:
+
+   **Web Interface (default):**
    ```bash
    python3 rag_chatbot.py
+   ```
+   Open http://localhost:8080 in your browser.
+
+   **Command Line Interface:**
+   ```bash
+   python3 rag_chatbot.py --cli
    ```
 
 ### Example Questions
@@ -129,18 +137,43 @@ RAG-SYSTEM/
 ├── requirements.txt
 ├── .env.example
 └── rag_system/
-    ├── ingest.py             # Multi-file ingestion
+    ├── ingest.py           # Multi-file ingestion
     ├── ingest_single_file.py # Single-file ingestion
-    ├── rag_chatbot.py      # RAG chatbot
+    ├── rag_chatbot.py      # RAG chatbot server
     ├── data/               # Place documents here
     │   └── book.txt
+    ├── static/             # Web frontend
+    │   ├── index.html
+    │   ├── styles.css
+    │   └── app.js
     └── chroma_db/          # Vector database (auto-created)
 ```
 
 ## Features
 
+- **Web Interface**: Clean, modern chat UI accessible at http://localhost:8080
 - **Local-first**: Run 100% locally with LM Studio (free, no API keys)
-- **RAG Support**: Chat with your documents
+- **RAG Support**: Chat with your documents with source citations
 - **Multi-provider**: Supports LM Studio, OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free)
-- **Conversation Memory**: Maintains chat context
+- **Conversation Memory**: Maintains chat context per session
+- **CLI Mode**: Command-line interface available with `--cli` flag
+
+## Server Configuration
+
+Configure via environment variables in `.env`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RAG_SERVER_HOST` | `0.0.0.0` | Server host |
+| `RAG_SERVER_PORT` | `8080` | Server port |
+| `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Web interface |
+| `/api/chat` | POST | Send message, get response |
+| `/api/clear` | POST | Clear conversation history |
+| `/api/health` | GET | Health check |

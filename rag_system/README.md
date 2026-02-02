@@ -35,8 +35,18 @@ python3 ingest.py
 
 ### 4. Chat with Documents
 
+**Web Interface (default):**
+
 ```bash
 python3 rag_chatbot.py
+```
+
+Open http://localhost:8080 in your browser.
+
+**Command Line Interface:**
+
+```bash
+python3 rag_chatbot.py --cli
 ```
 
 ---

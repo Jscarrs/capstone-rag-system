@@ -1,13 +1,42 @@
+"""
+RAG Chatbot Server
+
+Requirements:
+- Flask for web server
+- LangChain for RAG pipeline
+- ChromaDB for vector storage
+- Environment variables for LLM configuration
+
+Environment Variables:
+- LMSTUDIO_BASE_URL: Local LM Studio server URL
+- OPENAI_API_KEY: OpenAI API key
+- GOOGLE_API_KEY: Google Gemini API key
+- USE_LOCAL_EMBEDDINGS: Use local HuggingFace embeddings
+- RAG_SERVER_HOST: Server host (default: 0.0.0.0)
+- RAG_SERVER_PORT: Server port (default: 8080)
+- DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
+"""
+
 import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-
-DEBUG_CHUNKS = True
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 
 # Load environment variables
 load_dotenv()
+
+DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
+
+# Get directory of this script for static file serving
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Initialize Flask app
+app = Flask(__name__, static_folder=os.path.join(SCRIPT_DIR, 'static'))
+CORS(app)
+
 
 def get_llm():
     """
@@ -122,28 +151,149 @@ vectordb = Chroma(
 
 # Create a retriever from the vector database
 retriever = vectordb.as_retriever(
-search_type="similarity_score_threshold",
+    search_type="similarity",
     search_kwargs={
-        "k": 3,
-        "score_threshold": 0.3
+        "k": 3
     }
 )
 
-# Store conversation history
-chat_history = []
+# Store conversation history per session (simple in-memory storage)
+# For production, use session management or database
+sessions = {}
 
-def chat():
+SYSTEM_PROMPT = (
+    "Answer ONLY using the provided context. "
+    "Cite sources like [1], [2]. "
+    "If the answer is not in the context, say you don't know."
+)
+
+
+def get_or_create_session(session_id):
+    """Get existing session or create new one with system message."""
+    if session_id not in sessions:
+        sessions[session_id] = [
+            SystemMessage(content=SYSTEM_PROMPT)
+        ]
+    return sessions[session_id]
+
+
+def process_query(user_input, session_id="default"):
+    """
+    Process a user query and return the response with sources.
+    Used by both CLI and web server.
+    """
+    print(f"\n[USER QUERY] {user_input}")
+    
+    chat_history = get_or_create_session(session_id)
+
+    # Retrieve relevant chunks from vector database
+    relevant_docs = retriever.invoke(user_input)
+
+    if not relevant_docs:
+        return {
+            "answer": "I don't know.",
+            "sources": [],
+            "chunks_retrieved": 0
+        }
+
+    context = format_docs_with_citations(relevant_docs)
+    sources = build_sources(relevant_docs)
+
+    if DEBUG_CHUNKS:
+        print(f"\n[Retrieved {len(relevant_docs)} relevant chunks from database]")
+        print("\n[CHUNKS RETRIEVED:]")
+
+        for i, doc in enumerate(relevant_docs, 1):
+            meta = doc.metadata or {}
+            src = meta.get("source", "unknown")
+            path = meta.get("path", "unknown")
+            chunk_id = meta.get("chunk", "unknown")
+
+            print(f"\n  Chunk {i}:")
+            print(f"  Source: {src}")
+            print(f"  Path: {path}")
+            print(f"  Chunk: {chunk_id}")
+            print(f"  {doc.page_content}")
+
+        print("[END CHUNKS]\n")
+
+    # Create a message with context
+    contextualized_message = HumanMessage(
+        content=f"Context from document:\n{context}\n\nQuestion: {user_input}"
+    )
+
+    # Add to history
+    chat_history.append(contextualized_message)
+
+    # Get response from LLM
+    response = llm.invoke(chat_history)
+
+    # Add AI response to history
+    chat_history.append(response)
+
+    return {
+        "answer": response.content,
+        "sources": sources,
+        "chunks_retrieved": len(relevant_docs)
+    }
+
+
+# Flask Routes
+@app.route('/')
+def index():
+    """Serve the frontend HTML page."""
+    return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat_api():
+    """API endpoint for chat queries."""
+    data = request.get_json()
+
+    if not data or 'message' not in data:
+        return jsonify({"error": "No message provided"}), 400
+
+    user_message = data['message'].strip()
+    session_id = data.get('session_id', 'default')
+
+    if not user_message:
+        return jsonify({"error": "Empty message"}), 400
+
+    try:
+        result = process_query(user_message, session_id)
+        return jsonify(result)
+    except Exception as e:
+        print(f"[ERROR] Chat API error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/clear', methods=['POST'])
+def clear_session():
+    """Clear conversation history for a session."""
+    data = request.get_json() or {}
+    session_id = data.get('session_id', 'default')
+
+    if session_id in sessions:
+        del sessions[session_id]
+
+    return jsonify({"status": "cleared", "session_id": session_id})
+
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "vector_db": os.path.exists("./chroma_db")
+    })
+
+
+def chat_cli():
+    """Command-line interface for the chatbot."""
     print("RAG Chatbot initialized! Type 'quit' or 'exit' to end the conversation.")
     print("I can answer questions based on the ingested document.\n")
 
-    # Add system message to set context
-    system_message = SystemMessage(
-        content=("Answer ONLY using the provided context. "
-            "Cite sources like [1], [2]. "
-            "If the answer is not in the context, say you don't know."
-        )
-    )
-    chat_history.append(system_message)
+    session_id = "cli"
 
     while True:
         user_input = input("You: ").strip()
@@ -155,60 +305,43 @@ def chat():
         if not user_input:
             continue
 
-        # Retrieve relevant chunks from vector database
-        relevant_docs = retriever.invoke(user_input)
+        result = process_query(user_input, session_id)
 
-        if not relevant_docs:
-            print("\nBot: I don't know.\n")
-            continue
+        print(f"\nBot: {result['answer']}\n")
 
-        context = format_docs_with_citations(relevant_docs)
-        sources = build_sources(relevant_docs)
+        if result['sources']:
+            print("References:")
+            for s in result['sources']:
+                print(
+                    f"[{s['id']}] {s['source']} "
+                    f"(chunk {s['chunk']}) | {s['path']}"
+                )
+            print()
 
-        if DEBUG_CHUNKS:
-            print(f"\n[Retrieved {len(relevant_docs)} relevant chunks from database]")
-            print("\n[CHUNKS RETRIEVED:]")
 
-            for i, doc in enumerate(relevant_docs, 1):
-                meta = doc.metadata or {}
-                src = meta.get("source", "unknown")
-                path = meta.get("path", "unknown")
-                chunk_id = meta.get("chunk", "unknown")
+def run_server():
+    """Run the Flask web server."""
+    host = os.getenv("RAG_SERVER_HOST", "0.0.0.0")
+    port = int(os.getenv("RAG_SERVER_PORT", "8080"))
 
-                print(f"\n  Chunk {i}:")
-                print(f"  Source: {src}")
-                print(f"  Path: {path}")
-                print(f"  Chunk: {chunk_id}")
-                print(f"  {doc.page_content}")
+    print(f"\n{'='*50}")
+    print(f"RAG Chatbot Server starting...")
+    print(f"Open http://localhost:{port} in your browser")
+    print(f"{'='*50}\n")
 
-            print("[END CHUNKS]\n")
+    app.run(host=host, port=port, debug=False)
 
-        # Create a message with context
-        contextualized_message = HumanMessage(
-            content=f"Context from document:\n{context}\n\nQuestion: {user_input}"
-        )
-
-        # Add to history
-        chat_history.append(contextualized_message)
-
-        # Get response from LLM
-        response = llm.invoke(chat_history)
-
-        # Add AI response to history
-        chat_history.append(response)
-
-        print(f"\nBot: {response.content}\n")
-        print("References:")
-        for s in sources:
-            print(
-                f"[{s['id']}] {s['source']} "
-                f"(chunk {s['chunk']}) | {s['path']}"
-            )
-        print()
 
 if __name__ == "__main__":
+    import sys
+
     if not os.path.exists("./chroma_db"):
         print("Error: Vector database not found!")
         print("Please run 'python ingest.py' first to ingest your document.")
+        sys.exit(1)
+
+    # Check for command line arguments
+    if len(sys.argv) > 1 and sys.argv[1] == "--cli":
+        chat_cli()
     else:
-        chat()
+        run_server()
