@@ -151,9 +151,10 @@ vectordb = Chroma(
 
 # Create a retriever from the vector database
 retriever = vectordb.as_retriever(
-    search_type="similarity",
+search_type="similarity_score_threshold",
     search_kwargs={
-        "k": 3
+        "k": 3,
+        "score_threshold": 0.3
     }
 )
 
