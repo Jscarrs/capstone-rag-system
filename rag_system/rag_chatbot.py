@@ -25,10 +25,16 @@ from langchain_core.prompts import ChatPromptTemplate
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from parent directory
+# (since .env is in project root, not in rag_system folder)
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(parent_dir, '.env')
+load_dotenv(env_path)
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))  # Configurable threshold
+
+print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}]")  # Debug output
 
 # Get directory of this script for static file serving
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -117,9 +123,20 @@ def format_docs_with_citations(docs):
         meta = doc.metadata or {}
         source = meta.get("source", "unknown")
         chunk = meta.get("chunk", "unknown")
+        page = meta.get("page")
+        start_line = meta.get("start_line")
+        
+        # Build location string
+        location_parts = []
+        if page is not None:
+            location_parts.append(f"Page {page}")
+        if start_line is not None:
+            location_parts.append(f"Line ~{start_line}")
+        
+        location = ", ".join(location_parts) if location_parts else f"Chunk {chunk}"
 
         parts.append(
-            f"[{i}] Source: {source}, Chunk: {chunk}\n{doc.page_content}"
+            f"[{i}] Source: {source} ({location})\n{doc.page_content}"
         )
 
     return "\n\n".join(parts)
@@ -129,10 +146,25 @@ def build_sources(docs, preview_len=200):
     sources = []
     for i, doc in enumerate(docs, 1):
         meta = doc.metadata or {}
+        page = meta.get("page")
+        start_line = meta.get("start_line")
+        
+        # Build human-readable reference
+        ref_parts = []
+        if page is not None:
+            ref_parts.append(f"p.{page}")
+        if start_line is not None:
+            ref_parts.append(f"~L{start_line}")
+        
+        reference = ", ".join(ref_parts) if ref_parts else f"chunk {meta.get('chunk', 'unknown')}"
+        
         sources.append({
             "id": i,
             "source": meta.get("source"),
             "path": meta.get("path"),
+            "reference": reference,  # New: human-readable reference
+            "page": page,
+            "line": start_line,
             "chunk": meta.get("chunk"),
             "preview": doc.page_content[:preview_len]
         })
@@ -151,10 +183,10 @@ vectordb = Chroma(
 
 # Create a retriever from the vector database
 retriever = vectordb.as_retriever(
-search_type="similarity_score_threshold",
+    search_type="similarity_score_threshold",
     search_kwargs={
         "k": 3,
-        "score_threshold": 0.3
+        "score_threshold": SIMILARITY_THRESHOLD
     }
 )
 
@@ -314,8 +346,7 @@ def chat_cli():
             print("References:")
             for s in result['sources']:
                 print(
-                    f"[{s['id']}] {s['source']} "
-                    f"(chunk {s['chunk']}) | {s['path']}"
+                    f"[{s['id']}] {s['source']} ({s['reference']}) | {s['path']}"
                 )
             print()
 

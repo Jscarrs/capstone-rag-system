@@ -71,7 +71,7 @@ Open http://localhost:8080 in your browser to use the web interface.
 
 ### Usage
 
-1. Place your documents (`.txt`) in `rag_system/data/`
+1. Place your documents (`.txt` or `.pdf`) in `rag_system/data/`
 
 2. Ingest documents  
    (this step rebuilds the vector database):
@@ -105,11 +105,46 @@ Open http://localhost:8080 in your browser to use the web interface.
 
 ### Example Questions
 
-Based on the sample document (Sonic story):
+Based on the sample documents:
 
-- "What is the Chrono Core?"
+- "What is the Chrono Core?" (from Sonic story)
 - "Who are Sonic's friends?"
 - "What happened to Eggman's fortress?"
+- Questions about content from your PDF files
+
+### PDF Processing
+
+The system uses a **smart hybrid approach** for PDF processing:
+
+**1. Automatic Complexity Detection**
+- Analyzes PDFs for tables, images, diagrams, and math symbols
+- Automatically selects the best extraction method
+- Samples first 5 pages for fast detection
+
+**2. Dual Extraction Modes**
+
+- **Standard Mode (default):** Fast extraction with `pdfplumber`
+  - ⚡ Lightning fast (0.5s per page)
+  - ✅ Preserves page and line numbers for citations
+  - ✅ Perfect for most modern PDFs
+  - Recommended for development
+
+- **Advanced Mode (optional):** OCR with `Marker`
+  - 📊 Better table structure preservation
+  - 🧮 Enhanced equation handling
+  - 🐢 Slower (~1 min per page on CPU)
+  - ⚠️ Loses page numbers (Marker limitation)
+  - Enable via `.env`: `USE_ADVANCED_OCR=true`
+
+**3. Smart Citations**
+- **PDFs:** References like `paper.pdf (p.12, ~L45)`
+- **Text files:** References like `document.txt (~L230)`
+- Approximate line numbers for easy source verification
+
+**Supported PDF types:**
+- Text-based PDFs (journal articles, arXiv papers, etc.)
+- Complex layouts with tables, equations, multi-column text
+- Images and diagrams (text extraction only, not visual content)
 
 ---
 
@@ -154,6 +189,11 @@ RAG-SYSTEM/
 - **Web Interface**: Clean, modern chat UI accessible at http://localhost:8080
 - **Local-first**: Run 100% locally with LM Studio (free, no API keys)
 - **RAG Support**: Chat with your documents with source citations
+- **Smart PDF Processing**: 
+  - Automatic complexity detection (tables, images, equations)
+  - Page and line number tracking for easy verification
+  - Dual-mode: Fast standard extraction or advanced OCR
+  - Configurable via `USE_ADVANCED_OCR` setting
 - **Multi-provider**: Supports LM Studio, OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free)
 - **Conversation Memory**: Maintains chat context per session
@@ -168,6 +208,8 @@ Configure via environment variables in `.env`:
 | `RAG_SERVER_HOST` | `0.0.0.0` | Server host |
 | `RAG_SERVER_PORT` | `8080` | Server port |
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
+| `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
+| `USE_ADVANCED_OCR` | `false` | Enable Marker for complex PDFs |
 
 ## API Endpoints
 

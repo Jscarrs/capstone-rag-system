@@ -11,3 +11,5 @@ chromadb
 sentence-transformers
 flask
 flask-cors
+marker-pdf
+pdfplumber

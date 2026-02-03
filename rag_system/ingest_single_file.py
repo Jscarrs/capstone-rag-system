@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from parent directory
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(parent_dir, '.env')
+load_dotenv(env_path)
 
 def get_embeddings():
     """
@@ -65,18 +67,24 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
 
 def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
     """
-    Load a text file, split it into chunks, embed, and store in ChromaDB.
+    Load a document (text or PDF), split it into chunks, embed, and store in ChromaDB.
 
     Args:
-        file_path: Path to the text file
+        file_path: Path to the document file (.txt or .pdf)
         chunk_size: Size of each text chunk (in characters)
         chunk_overlap: Overlap between chunks to maintain context
     """
+    from pdf_processor import extract_text_from_pdf, is_pdf_file
+    
     print(f"Loading document from {file_path}...")
 
-    # Load the document
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read()
+    # Handle PDF files
+    if is_pdf_file(file_path):
+        text = extract_text_from_pdf(file_path)
+    # Handle text files
+    else:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
 
     print(f"Loaded document")
     print(f"Total characters: {len(text)}")
@@ -109,11 +117,12 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
     return vectordb
 
 if __name__ == "__main__":
-    # Example usage
-    file_path = "./data/book.txt"
+    # Example usage - supports both .txt and .pdf files
+    file_path = "./data/book.txt"  # Or use "./data/yourfile.pdf"
 
     if not os.path.exists(file_path):
         print(f"Error: File not found at {file_path}")
-        print("Please place your text file at ./rag_system/data/book.txt")
+        print("Please place your document at ./rag_system/data/")
+        print("Supported formats: .txt, .pdf")
     else:
         ingest_document(file_path)

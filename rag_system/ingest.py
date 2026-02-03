@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from parent directory
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(parent_dir, '.env')
+load_dotenv(env_path)
 
 DATA_DIR = "./data"
 CHROMA_DIR = "./chroma_db"
@@ -44,7 +46,7 @@ def get_embeddings():
 
 def split_text(text, chunk_size=1000, chunk_overlap=200):
     """
-    Split text into overlapping chunks.
+    Split text into overlapping chunks with position tracking.
 
     Args:
         text: The text to split
@@ -52,7 +54,7 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
         chunk_overlap: Overlap between chunks
 
     Returns:
-        List of text chunks
+        List of dicts with 'text' and 'start_pos' keys
     """
     chunks = []
     start = 0
@@ -61,40 +63,88 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
     while start < text_length:
         end = start + chunk_size
         chunk = text[start:end]
-        chunks.append(chunk)
+        chunks.append({
+            'text': chunk,
+            'start_pos': start  # Character position in original text
+        })
         start += chunk_size - chunk_overlap
 
     return chunks
 
 def ingest_all_documents(data_dir=DATA_DIR):
+    from pdf_processor import extract_text_from_pdf, is_pdf_file
+    
     documents = []
 
     print(f"Scanning folder: {data_dir}")
 
     for root, _, files in os.walk(data_dir):
         for file in files:
-            if not file.lower().endswith((".txt")):
+            # Support both .txt and .pdf files
+            if not file.lower().endswith((".txt", ".pdf")):
                 continue
 
             file_path = os.path.join(root, file)
             print(f"Loading file: {file_path}")
 
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
+            # Handle PDF files
+            if is_pdf_file(file_path):
+                try:
+                    page_data = extract_text_from_pdf(file_path)
+                    
+                    # Process each page
+                    for page_dict in page_data:
+                        page_num = page_dict['page']
+                        page_text = page_dict['text']
+                        
+                        # Split page text into chunks
+                        chunks = split_text(page_text)
+                        
+                        for i, chunk_dict in enumerate(chunks):
+                            # Calculate approximate line number from character position
+                            lines_before = page_text[:chunk_dict['start_pos']].count('\n')
+                            start_line = lines_before + 1
+                            
+                            documents.append(
+                                Document(
+                                    page_content=chunk_dict['text'],
+                                    metadata={
+                                        "source": file,
+                                        "path": file_path,
+                                        "chunk": i,
+                                        "page": page_num,  # Can be None for OCR
+                                        "start_line": start_line if page_num else None
+                                    }
+                                )
+                            )
+                            
+                except Exception as e:
+                    print(f"  Error processing PDF {file_path}: {str(e)}")
+                    continue
+                    
+            # Handle text files
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    text = f.read()
 
-            chunks = split_text(text)
+                chunks = split_text(text)
 
-            for i, chunk in enumerate(chunks):
-                documents.append(
-                    Document(
-                        page_content=chunk,
-                        metadata={
-                            "source": file,
-                            "path": file_path,
-                            "chunk": i
-                        }
+                for i, chunk_dict in enumerate(chunks):
+                    # Calculate line number from character position
+                    lines_before = text[:chunk_dict['start_pos']].count('\n')
+                    start_line = lines_before + 1
+                    
+                    documents.append(
+                        Document(
+                            page_content=chunk_dict['text'],
+                            metadata={
+                                "source": file,
+                                "path": file_path,
+                                "chunk": i,
+                                "start_line": start_line  # Line number in text file
+                            }
+                        )
                     )
-                )
 
     print(f"Total chunks created: {len(documents)}")
 
