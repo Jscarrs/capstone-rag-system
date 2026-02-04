@@ -20,8 +20,7 @@ Environment Variables:
 import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -32,12 +31,13 @@ env_path = os.path.join(parent_dir, '.env')
 load_dotenv(env_path)
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))  # Configurable threshold
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))  # Configurable threshold
 
 print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}]")  # Debug output
 
 # Get directory of this script for static file serving
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
 
 # Initialize Flask app
 app = Flask(__name__, static_folder=os.path.join(SCRIPT_DIR, 'static'))
@@ -176,7 +176,7 @@ llm = get_llm()
 # Load the vector database
 embeddings = get_embeddings()
 vectordb = Chroma(
-    persist_directory="./chroma_db",
+    persist_directory=CHROMA_DIR,
     embedding_function=embeddings,
     collection_metadata={"hnsw:space": "cosine"}
 )
@@ -196,6 +196,7 @@ sessions = {}
 
 SYSTEM_PROMPT = (
     "Answer ONLY using the provided context. "
+    "Use chat history only to understand the question (e.g., resolve pronouns), not as a source of facts. "
     "Cite sources like [1], [2]. "
     "If the answer is not in the context, say you don't know."
 )
@@ -250,18 +251,14 @@ def process_query(user_input, session_id="default"):
 
         print("[END CHUNKS]\n")
 
-    # Create a message with context
-    contextualized_message = HumanMessage(
+    # Inject retrieved context for this turn without persisting it in session history.
+    rag_prompt = HumanMessage(
         content=f"Context from document:\n{context}\n\nQuestion: {user_input}"
     )
 
-    # Add to history
-    chat_history.append(contextualized_message)
+    response = llm.invoke(chat_history + [rag_prompt])
 
-    # Get response from LLM
-    response = llm.invoke(chat_history)
-
-    # Add AI response to history
+    chat_history.append(HumanMessage(content=user_input))
     chat_history.append(response)
 
     return {
@@ -317,7 +314,7 @@ def health_check():
     """Health check endpoint."""
     return jsonify({
         "status": "healthy",
-        "vector_db": os.path.exists("./chroma_db")
+        "vector_db": os.path.exists(CHROMA_DIR)
     })
 
 
@@ -367,7 +364,7 @@ def run_server():
 if __name__ == "__main__":
     import sys
 
-    if not os.path.exists("./chroma_db"):
+    if not os.path.exists(CHROMA_DIR):
         print("Error: Vector database not found!")
         print("Please run 'python ingest.py' first to ingest your document.")
         sys.exit(1)

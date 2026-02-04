@@ -45,7 +45,18 @@ function addMessage(content, isUser, sources = null, isError = false) {
             sourceItem.className = 'source-item';
             
             const sourceText = document.createElement('span');
-            sourceText.innerHTML = `<span class="source-id">[${source.id}]</span> ${source.source} (chunk ${source.chunk})`;
+
+            const sourceId = document.createElement('span');
+            sourceId.className = 'source-id';
+            sourceId.textContent = `[${source.id}]`;
+
+            const sourceMeta = document.createElement('span');
+            const sourceName = source.source || 'unknown';
+            const reference = source.reference || (source.chunk != null ? `chunk ${source.chunk}` : '');
+            sourceMeta.textContent = ` ${sourceName}${reference ? ` (${reference})` : ''}`;
+
+            sourceText.appendChild(sourceId);
+            sourceText.appendChild(sourceMeta);
             sourceItem.appendChild(sourceText);
 
             if (source.preview) {

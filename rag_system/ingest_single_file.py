@@ -1,12 +1,16 @@
 import os
 from dotenv import load_dotenv
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 # Load environment variables from parent directory
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(parent_dir, '.env')
 load_dotenv(env_path)
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
+USE_ADVANCED_OCR = os.getenv("USE_ADVANCED_OCR", "false").lower() == "true"
 
 def get_embeddings():
     """
@@ -43,7 +47,7 @@ def get_embeddings():
 
 def split_text(text, chunk_size=1000, chunk_overlap=200):
     """
-    Split text into overlapping chunks.
+    Split text into overlapping chunks with position tracking.
 
     Args:
         text: The text to split
@@ -51,7 +55,7 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
         chunk_overlap: Overlap between chunks
 
     Returns:
-        List of text chunks
+        List of dicts with 'text' and 'start_pos' keys
     """
     chunks = []
     start = 0
@@ -60,7 +64,10 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
     while start < text_length:
         end = start + chunk_size
         chunk = text[start:end]
-        chunks.append(chunk)
+        chunks.append({
+            'text': chunk,
+            'start_pos': start  # Character position in original text
+        })
         start += chunk_size - chunk_overlap
 
     return chunks
@@ -78,24 +85,66 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
     
     print(f"Loading document from {file_path}...")
 
+    documents = []
+    file_name = os.path.basename(file_path)
+    print(f"\nSplitting text into chunks (size={chunk_size}, overlap={chunk_overlap})...")
+
     # Handle PDF files
     if is_pdf_file(file_path):
-        text = extract_text_from_pdf(file_path)
+        page_data = extract_text_from_pdf(file_path, force_marker=USE_ADVANCED_OCR)
+
+        for page_dict in page_data:
+            page_num = page_dict['page']
+            page_text = page_dict['text']
+
+            chunks = split_text(page_text, chunk_size, chunk_overlap)
+
+            for i, chunk_dict in enumerate(chunks):
+                lines_before = page_text[:chunk_dict['start_pos']].count('\n')
+                start_line = lines_before + 1
+
+                documents.append(
+                    Document(
+                        page_content=chunk_dict['text'],
+                        metadata={
+                            "source": file_name,
+                            "path": file_path,
+                            "chunk": i,
+                            "page": page_num,  # Can be None for OCR
+                            "start_line": start_line if page_num else None
+                        }
+                    )
+                )
+
+        total_chars = sum(len(page_dict.get("text", "")) for page_dict in page_data)
+
     # Handle text files
     else:
         with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
-    print(f"Loaded document")
-    print(f"Total characters: {len(text)}")
+        chunks = split_text(text, chunk_size, chunk_overlap)
 
-    # Split the text into chunks
-    print(f"\nSplitting text into chunks (size={chunk_size}, overlap={chunk_overlap})...")
-    text_chunks = split_text(text, chunk_size, chunk_overlap)
+        for i, chunk_dict in enumerate(chunks):
+            lines_before = text[:chunk_dict['start_pos']].count('\n')
+            start_line = lines_before + 1
 
-    # Convert to Document objects
-    documents = [Document(page_content=chunk, metadata={"source": file_path}) for chunk in text_chunks]
+            documents.append(
+                Document(
+                    page_content=chunk_dict['text'],
+                    metadata={
+                        "source": file_name,
+                        "path": file_path,
+                        "chunk": i,
+                        "start_line": start_line
+                    }
+                )
+            )
 
+        total_chars = len(text)
+
+    print("Loaded document")
+    print(f"Total characters: {total_chars}")
     print(f"Created {len(documents)} chunks")
 
     # Create embeddings
@@ -107,22 +156,23 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
     vectordb = Chroma.from_documents(
         documents=documents,
         embedding=embeddings,
-        persist_directory="./chroma_db"
+        persist_directory=CHROMA_DIR,
+        collection_metadata={"hnsw:space": "cosine"}
     )
 
     print(f"\n✓ Successfully ingested document!")
-    print(f"✓ Vector database saved to ./rag_system/chroma_db")
+    print(f"✓ Vector database saved to {CHROMA_DIR}")
     print(f"✓ Total chunks stored: {len(documents)}")
 
     return vectordb
 
 if __name__ == "__main__":
     # Example usage - supports both .txt and .pdf files
-    file_path = "./data/book.txt"  # Or use "./data/yourfile.pdf"
+    file_path = os.path.join(SCRIPT_DIR, "data", "book.txt")  # Or point to any .txt/.pdf file
 
     if not os.path.exists(file_path):
         print(f"Error: File not found at {file_path}")
-        print("Please place your document at ./rag_system/data/")
+        print(f"Please place your document at {os.path.join(SCRIPT_DIR, 'data')}")
         print("Supported formats: .txt, .pdf")
     else:
         ingest_document(file_path)

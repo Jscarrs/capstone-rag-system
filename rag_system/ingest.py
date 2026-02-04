@@ -8,8 +8,10 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(parent_dir, '.env')
 load_dotenv(env_path)
 
-DATA_DIR = "./data"
-CHROMA_DIR = "./chroma_db"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
+USE_ADVANCED_OCR = os.getenv("USE_ADVANCED_OCR", "false").lower() == "true"
 
 def get_embeddings():
     """
@@ -90,7 +92,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
             # Handle PDF files
             if is_pdf_file(file_path):
                 try:
-                    page_data = extract_text_from_pdf(file_path)
+                    page_data = extract_text_from_pdf(file_path, force_marker=USE_ADVANCED_OCR)
                     
                     # Process each page
                     for page_dict in page_data:
