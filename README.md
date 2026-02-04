@@ -219,3 +219,28 @@ Configure via environment variables in `.env`:
 | `/api/chat` | POST | Send message, get response |
 | `/api/clear` | POST | Clear conversation history |
 | `/api/health` | GET | Health check |
+
+---
+
+## Credits & Acknowledgments
+
+This project is built upon the following open-source libraries and tools:
+
+### Core Frameworks
+- **[LangChain](https://github.com/langchain-ai/langchain)** - Framework for building LLM-powered applications
+- **[ChromaDB](https://github.com/chroma-core/chroma)** - Open-source embedding database for vector storage
+
+### Embeddings
+- **[HuggingFace Transformers](https://github.com/huggingface/transformers)** - Local embeddings via `sentence-transformers/all-MiniLM-L6-v2`
+
+### PDF Processing
+- **[pdfplumber](https://github.com/jsvine/pdfplumber)** - Fast text extraction from PDFs
+- **[Marker](https://github.com/VikParuchuri/marker)** - Advanced PDF to markdown conversion with OCR
+
+### LLM Providers
+- **[LM Studio](https://lmstudio.ai/)** - Local LLM inference server
+- **[OpenAI](https://openai.com/)** - GPT models API
+- **[Google Gemini](https://ai.google.dev/)** - Gemini models API
+
+### Web Framework
+- **[Flask](https://github.com/pallets/flask)** - Python web framework for the chat server
