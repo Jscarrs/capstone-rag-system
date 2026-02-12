@@ -342,8 +342,17 @@ def upload_document():
     if file.filename == '':
         return jsonify({"error": "No file selected"}), 400
 
-    # Validate file extension
-    filename = secure_filename(file.filename)
+    # Sanitize filename while preserving Unicode characters (e.g. Chinese)
+    # secure_filename() strips non-ASCII, so we do our own sanitization
+    import re
+    import time
+    raw_name = file.filename
+    # Remove path separators and null bytes
+    sanitized = re.sub(r'[/\\:\x00]', '', raw_name).strip()
+    # If nothing is left (shouldn't happen), use a timestamp
+    if not sanitized or sanitized.startswith('.'):
+        sanitized = f"upload_{int(time.time())}{os.path.splitext(raw_name)[1]}"
+    filename = sanitized
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         return jsonify({
