@@ -24,14 +24,54 @@
             <div class="upload-status" id="upload-status" hidden></div>
             <div class="document-list" id="document-list"></div>
             <button id="reset-db-btn" class="reset-db-btn" hidden>Clear Database</button>
+
+            <details class="settings-panel" id="settings-panel">
+                <summary class="settings-summary">Runtime & Retrieval Settings</summary>
+                <div class="settings-content">
+                    <div class="settings-title">Runtime</div>
+                    <div class="runtime-row">
+                        <span class="runtime-label">LLM</span>
+                        <span class="runtime-value" id="llm-info">Loading...</span>
+                    </div>
+                    <div class="runtime-row">
+                        <span class="runtime-label">Embeddings</span>
+                        <span class="runtime-value" id="embedding-info">Loading...</span>
+                    </div>
+                    <div class="runtime-row">
+                        <span class="runtime-label">OCR</span>
+                        <span class="runtime-value" id="ocr-info">Loading...</span>
+                    </div>
+
+                    <div class="settings-title">Retrieval Controls</div>
+                    <label class="setting-row" for="use-threshold-toggle">
+                        <span class="setting-label">Use Threshold Filter</span>
+                        <input type="checkbox" id="use-threshold-toggle">
+                    </label>
+
+                    <label class="setting-row threshold-row" for="threshold-input">
+                        <span class="setting-label">Threshold (0.0 - 1.0)</span>
+                        <input type="number" id="threshold-input" min="0" max="1" step="0.01">
+                    </label>
+
+                    <label class="setting-row" for="auto-fallback-toggle">
+                        <span class="setting-label">Auto Fallback</span>
+                        <input type="checkbox" id="auto-fallback-toggle">
+                    </label>
+
+                    <label class="setting-row" for="debug-chunks-toggle">
+                        <span class="setting-label">Debug Chunks</span>
+                        <input type="checkbox" id="debug-chunks-toggle">
+                    </label>
+
+                    <div class="settings-status" id="settings-status" hidden></div>
+                </div>
+            </details>
         </div>
 
         <div class="chat-container" id="chat-container">
             <div class="messages" id="messages">
                 <div class="message bot-message">
-                    <div class="message-content">
-                        Hello! I can answer questions based on the ingested documents. What would you like to know?
-                    </div>
+                    <div class="message-content">Hello! I can answer questions based on the ingested documents. What would you like to know?</div>
                 </div>
             </div>
         </div>
