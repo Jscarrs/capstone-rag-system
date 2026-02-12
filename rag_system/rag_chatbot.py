@@ -15,6 +15,9 @@ Environment Variables:
 - RAG_SERVER_HOST: Server host (default: 0.0.0.0)
 - RAG_SERVER_PORT: Server port (default: 8080)
 - DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
+- PDF_SERVICES_CLIENT_ID: Adobe PDF Services client ID
+- PDF_SERVICES_CLIENT_SECRET: Adobe PDF Services client secret
+- USE_ADOBE_OCR: Use Adobe PDF Services for OCR (default: false)
 """
 
 import os
@@ -23,6 +26,7 @@ from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 # Load environment variables from parent directory
 # (since .env is in project root, not in rag_system folder)
@@ -38,6 +42,8 @@ print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}]")  # Debug output
 # Get directory of this script for static file serving
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
 # Initialize Flask app
 app = Flask(__name__, static_folder=os.path.join(SCRIPT_DIR, 'static'))
@@ -220,6 +226,14 @@ def process_query(user_input, session_id="default"):
     
     chat_history = get_or_create_session(session_id)
 
+    # Check if vector database is available (may be None after reset)
+    if retriever is None:
+        return {
+            "answer": "No documents have been ingested yet. Please upload a document first.",
+            "sources": [],
+            "chunks_retrieved": 0
+        }
+
     # Retrieve relevant chunks from vector database
     relevant_docs = retriever.invoke(user_input)
 
@@ -316,6 +330,137 @@ def health_check():
         "status": "healthy",
         "vector_db": os.path.exists(CHROMA_DIR)
     })
+
+
+@app.route('/api/upload', methods=['POST'])
+def upload_document():
+    """Upload a document and ingest it into the vector database."""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+
+    # Validate file extension
+    filename = secure_filename(file.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({
+            "error": f"Unsupported file type: {ext}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+        }), 400
+
+    # Ensure data directory exists
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Save file to data directory
+    file_path = os.path.join(DATA_DIR, filename)
+    file.save(file_path)
+    print(f"[UPLOAD] Saved file: {file_path}")
+
+    try:
+        # Use prepare_documents to extract text and create chunks
+        # without opening a separate Chroma connection
+        from ingest_single_file import prepare_documents
+        documents = prepare_documents(file_path)
+
+        # Add documents to the server's existing vector database
+        # ChromaDB has a max batch size, so add in batches
+        print("Storing in ChromaDB vector database...")
+        BATCH_SIZE = 5000
+        for i in range(0, len(documents), BATCH_SIZE):
+            batch = documents[i:i + BATCH_SIZE]
+            vectordb.add_documents(batch)
+            print(f"  -> Added batch {i // BATCH_SIZE + 1} ({len(batch)} chunks)")
+
+        print(f"[UPLOAD] Successfully ingested: {filename} ({len(documents)} chunks)")
+        return jsonify({
+            "status": "success",
+            "filename": filename,
+            "message": f"Document '{filename}' uploaded and ingested successfully ({len(documents)} chunks)."
+        })
+    except Exception as e:
+        print(f"[UPLOAD ERROR] Failed to ingest {filename}: {e}")
+        return jsonify({"error": f"Failed to process document: {str(e)}"}), 500
+
+
+@app.route('/api/documents', methods=['GET'])
+def list_documents():
+    """List documents in the data directory."""
+    if not os.path.exists(DATA_DIR):
+        return jsonify({"documents": []})
+
+    documents = []
+    for f in sorted(os.listdir(DATA_DIR)):
+        ext = os.path.splitext(f)[1].lower()
+        if ext in ALLOWED_EXTENSIONS:
+            file_path = os.path.join(DATA_DIR, f)
+            documents.append({
+                "name": f,
+                "size": os.path.getsize(file_path),
+                "type": ext[1:]  # Remove the dot
+            })
+
+    return jsonify({"documents": documents})
+
+
+@app.route('/api/reset-db', methods=['POST'])
+def reset_database():
+    """Clear the ChromaDB vector database and data directory."""
+    import shutil
+
+    errors = []
+
+    # Clear all documents from ChromaDB via its API
+    # (do NOT delete the chroma_db directory -- that causes SQLite connection errors)
+    try:
+        collection = vectordb._collection
+        all_ids = collection.get()['ids']
+        if all_ids:
+            # ChromaDB has a max batch size, delete in batches
+            BATCH_SIZE = 5000
+            for i in range(0, len(all_ids), BATCH_SIZE):
+                batch = all_ids[i:i + BATCH_SIZE]
+                collection.delete(ids=batch)
+            print(f"[RESET] Cleared {len(all_ids)} documents from ChromaDB")
+        else:
+            print("[RESET] ChromaDB already empty")
+    except Exception as e:
+        errors.append(f"Failed to clear ChromaDB: {str(e)}")
+
+    # Clear uploaded data files
+    if os.path.exists(DATA_DIR):
+        try:
+            shutil.rmtree(DATA_DIR)
+            os.makedirs(DATA_DIR, exist_ok=True)
+            print(f"[RESET] Cleared data directory: {DATA_DIR}")
+        except Exception as e:
+            errors.append(f"Failed to clear data directory: {str(e)}")
+
+    if errors:
+        return jsonify({"error": "; ".join(errors)}), 500
+
+    return jsonify({
+        "status": "success",
+        "message": "Database and uploaded documents cleared successfully."
+    })
+
+
+def _reload_vectordb():
+    """Reload the vector database to pick up newly ingested documents."""
+    global vectordb, retriever
+    vectordb = Chroma(
+        persist_directory=CHROMA_DIR,
+        embedding_function=embeddings,
+        collection_metadata={"hnsw:space": "cosine"}
+    )
+    retriever = vectordb.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={
+            "k": 3,
+            "score_threshold": SIMILARITY_THRESHOLD
+        }
+    )
 
 
 def chat_cli():

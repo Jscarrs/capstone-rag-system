@@ -4,9 +4,15 @@ PDF Processing Module with Hybrid Extraction
 This module provides intelligent PDF text extraction with a hybrid approach:
 1. Fast standard extraction using pdfplumber (for simple text-based PDFs)
 2. Advanced Marker-based extraction (for complex/scanned PDFs)
+3. Adobe PDF Services Extract API (cloud-based OCR, requires credentials)
 
 The hybrid approach optimizes performance by using fast extraction when
 possible and only falling back to Marker when needed.
+
+Environment Variables:
+- USE_ADOBE_OCR: Set to 'true' to use Adobe PDF Services for extraction
+- PDF_SERVICES_CLIENT_ID: Adobe API client ID
+- PDF_SERVICES_CLIENT_SECRET: Adobe API client secret
 """
 
 import os
@@ -191,18 +197,20 @@ def extract_with_marker(pdf_path: str) -> Optional[str]:
         return None
 
 
-def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, auto_detect: bool = True):
+def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, use_adobe: bool = False, auto_detect: bool = True):
     """
     Extract text from PDF using smart hybrid approach with complexity detection.
     
     This function intelligently chooses the best extraction method:
-    1. Detects PDF complexity (tables, images, math) if auto_detect=True
-    2. Uses Marker for complex PDFs, standard extraction for simple PDFs
-    3. Falls back to Marker if standard extraction fails
+    1. Adobe PDF Services Extract API (if use_adobe=True and credentials configured)
+    2. Detects PDF complexity (tables, images, math) if auto_detect=True
+    3. Uses Marker for complex PDFs, standard extraction for simple PDFs
+    4. Falls back to Marker if standard extraction fails
     
     Args:
         pdf_path: Path to the PDF file
         force_marker: If True, skip detection and use Marker directly
+        use_adobe: If True, use Adobe PDF Services Extract API
         auto_detect: If True, detect complexity and choose method automatically
         
     Returns:
@@ -210,27 +218,39 @@ def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, auto_detect
         or a single dict with 'page': None and 'text': full_text for Marker extraction
         
     Raises:
-        ValueError: If both extraction methods fail
+        ValueError: If all extraction methods fail
     """
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
     
     print(f"\nProcessing PDF: {os.path.basename(pdf_path)}")
     
+    # Try Adobe PDF Services Extract API first if requested
+    if use_adobe:
+        from adobe_ocr import extract_text_with_adobe, is_adobe_ocr_available
+        if is_adobe_ocr_available():
+            print("  -> Using Adobe PDF Services Extract API")
+            return extract_text_with_adobe(pdf_path)
+        else:
+            raise ValueError(
+                "Adobe OCR requested (USE_ADOBE_OCR=true) but credentials not configured. "
+                "Set PDF_SERVICES_CLIENT_ID and PDF_SERVICES_CLIENT_SECRET in .env"
+            )
+    
     # Smart detection: check if PDF is complex
     use_marker = force_marker
     
     if not force_marker and auto_detect:
-        print("  🔍 Detecting PDF complexity...")
+        print("  Detecting PDF complexity...")
         complexity = detect_pdf_complexity(pdf_path)
         
         if complexity['is_complex']:
             use_marker = True
-            print(f"  ✓ Complex PDF detected ({complexity['reason']})")
-            print(f"  → Using Marker for better quality")
+            print(f"  Complex PDF detected ({complexity['reason']})")
+            print(f"  -> Using Marker for better quality")
         else:
-            print(f"  ✓ Simple PDF detected ({complexity['reason']})")
-            print(f"  → Using fast standard extraction")
+            print(f"  Simple PDF detected ({complexity['reason']})")
+            print(f"  -> Using fast standard extraction")
     
     # Use Marker if determined to be complex or forced
     if use_marker:
@@ -238,8 +258,7 @@ def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, auto_detect
         if text:
             return [{'page': None, 'text': text}]
         else:
-            # Marker failed, try fallback to standard
-            print("  ⚠ Marker failed, falling back to standard extraction...")
+            print("  Warning: Marker failed, falling back to standard extraction...")
             page_data, success = try_standard_extraction(pdf_path)
             if success and page_data:
                 return page_data
@@ -252,7 +271,7 @@ def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, auto_detect
         return page_data
     
     # Standard extraction failed, try Marker as fallback
-    print("  ⚠ Standard extraction failed, trying Marker as fallback...")
+    print("  Warning: Standard extraction failed, trying Marker as fallback...")
     text = extract_with_marker(pdf_path)
     
     if text:
@@ -260,7 +279,7 @@ def extract_text_from_pdf(pdf_path: str, force_marker: bool = False, auto_detect
     else:
         raise ValueError(
             f"Failed to extract text from PDF: {pdf_path}\n"
-            f"Both standard and Marker extraction failed. "
+            f"All extraction methods failed. "
             f"Ensure dependencies are installed: pip install pdfplumber marker-pdf"
         )
 

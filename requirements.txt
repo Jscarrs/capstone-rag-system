@@ -13,3 +13,4 @@ flask
 flask-cors
 marker-pdf
 pdfplumber
+pdfservices-sdk

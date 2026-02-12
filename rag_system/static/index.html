@@ -1,17 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG Chatbot</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
+
 <body>
     <div class="container">
         <header class="header">
             <h1>RAG Chatbot</h1>
             <p>Ask questions about your documents</p>
         </header>
+
+        <div class="upload-section" id="upload-section">
+            <div class="upload-dropzone" id="upload-dropzone">
+                <p class="upload-label">Drop a file here or click to upload</p>
+                <p class="upload-hint">Supports .txt and .pdf files</p>
+                <input type="file" id="file-input" accept=".txt,.pdf" hidden>
+            </div>
+            <div class="upload-status" id="upload-status" hidden></div>
+            <div class="document-list" id="document-list"></div>
+            <button id="reset-db-btn" class="reset-db-btn" hidden>Clear Database</button>
+        </div>
 
         <div class="chat-container" id="chat-container">
             <div class="messages" id="messages">
@@ -25,13 +38,7 @@
 
         <div class="input-container">
             <form id="chat-form" class="chat-form">
-                <input 
-                    type="text" 
-                    id="user-input" 
-                    placeholder="Type your question here..." 
-                    autocomplete="off"
-                    required
-                >
+                <input type="text" id="user-input" placeholder="Type your question here..." autocomplete="off" required>
                 <button type="submit" id="send-btn">
                     <span class="btn-text">Send</span>
                     <span class="btn-loading" style="display: none;">...</span>
@@ -43,4 +50,5 @@
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>

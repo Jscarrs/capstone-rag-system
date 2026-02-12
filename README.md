@@ -16,7 +16,7 @@ A chatbot built with LangChain that supports conversation memory and RAG (Retrie
 
 ### Step 1: Install LM Studio
 
-Download from https://lmstudio.ai/
+Download from <https://lmstudio.ai/>
 
 ### Step 2: Load a Model in LM Studio
 
@@ -57,7 +57,8 @@ python3 ingest.py      # Ingest documents first
 python3 rag_chatbot.py # Start web server (default)
 ```
 
-Open http://localhost:8080 in your browser to use the web interface.
+Open <http://localhost:8080> in your browser to use the web interface.
+You can also upload documents directly through the web UI.
 
 ---
 
@@ -71,7 +72,7 @@ Open http://localhost:8080 in your browser to use the web interface.
 
 ### Usage
 
-1. Place your documents (`.txt` or `.pdf`) in `rag_system/data/`
+1. Place your documents (`.txt` or `.pdf`) in `rag_system/data/`, **or upload them through the web interface**
 
 2. Ingest documents  
    (this step rebuilds the vector database):
@@ -93,12 +94,15 @@ Open http://localhost:8080 in your browser to use the web interface.
 3. Chat with your documents:
 
    **Web Interface (default):**
+
    ```bash
    python3 rag_chatbot.py
    ```
-   Open http://localhost:8080 in your browser.
+
+   Open <http://localhost:8080> in your browser.
 
    **Command Line Interface:**
+
    ```bash
    python3 rag_chatbot.py --cli
    ```
@@ -117,6 +121,7 @@ Based on the sample documents:
 The system uses a **smart hybrid approach** for PDF processing:
 
 **1. Automatic Complexity Detection**
+
 - Analyzes PDFs for tables, images, diagrams, and math symbols
 - Automatically selects the best extraction method
 - Samples first 5 pages for fast detection
@@ -137,14 +142,33 @@ The system uses a **smart hybrid approach** for PDF processing:
   - Enable via `.env`: `USE_ADVANCED_OCR=true`
 
 **3. Smart Citations**
+
 - **PDFs:** References like `paper.pdf (p.12, ~L45)`
 - **Text files:** References like `document.txt (~L230)`
 - Approximate line numbers for easy source verification
 
 **Supported PDF types:**
+
 - Text-based PDFs (journal articles, arXiv papers, etc.)
 - Complex layouts with tables, equations, multi-column text
 - Images and diagrams (text extraction only, not visual content)
+
+### Adobe PDF Services (Optional)
+
+For cloud-based OCR processing of scanned PDFs, you can use Adobe PDF Services:
+
+1. Get credentials from [Adobe Developer Console](https://developer.adobe.com/console)
+2. Add to your `.env`:
+
+   ```
+   PDF_SERVICES_CLIENT_ID=your_client_id
+   PDF_SERVICES_CLIENT_SECRET=your_client_secret
+   USE_ADOBE_OCR=true
+   ```
+
+3. Install the SDK: `pip install pdfservices-sdk`
+
+When enabled, Adobe PDF Services Extract API is used as the primary PDF extraction method, with local tools as fallback.
 
 ---
 
@@ -175,6 +199,8 @@ RAG-SYSTEM/
     ├── ingest.py           # Multi-file ingestion
     ├── ingest_single_file.py # Single-file ingestion
     ├── rag_chatbot.py      # RAG chatbot server
+    ├── pdf_processor.py    # PDF text extraction (pdfplumber/Marker)
+    ├── adobe_ocr.py        # Adobe PDF Services integration
     ├── data/               # Place documents here
     │   └── book.txt
     ├── static/             # Web frontend
@@ -186,14 +212,16 @@ RAG-SYSTEM/
 
 ## Features
 
-- **Web Interface**: Clean, modern chat UI accessible at http://localhost:8080
+- **Web Interface**: Clean, modern chat UI accessible at <http://localhost:8080>
+- **Document Upload**: Upload .txt and .pdf files directly through the web UI with drag-and-drop
 - **Local-first**: Run 100% locally with LM Studio (free, no API keys)
 - **RAG Support**: Chat with your documents with source citations
-- **Smart PDF Processing**: 
+- **Smart PDF Processing**:
   - Automatic complexity detection (tables, images, equations)
   - Page and line number tracking for easy verification
   - Dual-mode: Fast standard extraction or advanced OCR
-  - Configurable via `USE_ADVANCED_OCR` setting
+  - Optional Adobe PDF Services for cloud-based OCR
+  - Configurable via `USE_ADVANCED_OCR` and `USE_ADOBE_OCR` settings
 - **Multi-provider**: Supports LM Studio, OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free)
 - **Conversation Memory**: Maintains chat context per session
@@ -210,6 +238,9 @@ Configure via environment variables in `.env`:
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
 | `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
 | `USE_ADVANCED_OCR` | `false` | Enable Marker for complex PDFs |
+| `USE_ADOBE_OCR` | `false` | Enable Adobe PDF Services Extract API |
+| `PDF_SERVICES_CLIENT_ID` | - | Adobe API client ID |
+| `PDF_SERVICES_CLIENT_SECRET` | - | Adobe API client secret |
 
 ## API Endpoints
 
@@ -217,6 +248,8 @@ Configure via environment variables in `.env`:
 |----------|--------|-------------|
 | `/` | GET | Web interface |
 | `/api/chat` | POST | Send message, get response |
+| `/api/upload` | POST | Upload and ingest a document |
+| `/api/documents` | GET | List ingested documents |
 | `/api/clear` | POST | Clear conversation history |
 | `/api/health` | GET | Health check |
 
@@ -227,20 +260,29 @@ Configure via environment variables in `.env`:
 This project is built upon the following open-source libraries and tools:
 
 ### Core Frameworks
+
 - **[LangChain](https://github.com/langchain-ai/langchain)** - Framework for building LLM-powered applications
 - **[ChromaDB](https://github.com/chroma-core/chroma)** - Open-source embedding database for vector storage
 
 ### Embeddings
+
 - **[HuggingFace Transformers](https://github.com/huggingface/transformers)** - Local embeddings via `sentence-transformers/all-MiniLM-L6-v2`
 
 ### PDF Processing
+
 - **[pdfplumber](https://github.com/jsvine/pdfplumber)** - Fast text extraction from PDFs
 - **[Marker](https://github.com/VikParuchuri/marker)** - Advanced PDF to markdown conversion with OCR
 
 ### LLM Providers
+
 - **[LM Studio](https://lmstudio.ai/)** - Local LLM inference server
 - **[OpenAI](https://openai.com/)** - GPT models API
 - **[Google Gemini](https://ai.google.dev/)** - Gemini models API
 
 ### Web Framework
+
 - **[Flask](https://github.com/pallets/flask)** - Python web framework for the chat server
+
+### Cloud OCR (Optional)
+
+- **[Adobe PDF Services](https://developer.adobe.com/document-services/)** - Cloud-based PDF text extraction via Extract API

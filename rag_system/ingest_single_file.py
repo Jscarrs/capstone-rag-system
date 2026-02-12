@@ -10,7 +10,8 @@ load_dotenv(env_path)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-USE_ADVANCED_OCR = os.getenv("USE_ADVANCED_OCR", "false").lower() == "true"
+USE_MARKER_OCR = os.getenv("USE_MARKER_OCR", os.getenv("USE_ADVANCED_OCR", "false")).lower() == "true"
+USE_ADOBE_OCR = os.getenv("USE_ADOBE_OCR", "false").lower() == "true"
 
 def get_embeddings():
     """
@@ -72,17 +73,21 @@ def split_text(text, chunk_size=1000, chunk_overlap=200):
 
     return chunks
 
-def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
+def prepare_documents(file_path, chunk_size=1000, chunk_overlap=200):
     """
-    Load a document (text or PDF), split it into chunks, embed, and store in ChromaDB.
+    Load a document (text or PDF) and split it into LangChain Document chunks.
+    Does NOT write to ChromaDB -- returns documents for the caller to store.
 
     Args:
         file_path: Path to the document file (.txt or .pdf)
         chunk_size: Size of each text chunk (in characters)
         chunk_overlap: Overlap between chunks to maintain context
+
+    Returns:
+        List of LangChain Document objects ready for embedding/storage
     """
     from pdf_processor import extract_text_from_pdf, is_pdf_file
-    
+
     print(f"Loading document from {file_path}...")
 
     documents = []
@@ -91,7 +96,7 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
 
     # Handle PDF files
     if is_pdf_file(file_path):
-        page_data = extract_text_from_pdf(file_path, force_marker=USE_ADVANCED_OCR)
+        page_data = extract_text_from_pdf(file_path, force_marker=USE_MARKER_OCR, use_adobe=USE_ADOBE_OCR)
 
         for page_dict in page_data:
             page_num = page_dict['page']
@@ -146,6 +151,21 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
     print("Loaded document")
     print(f"Total characters: {total_chars}")
     print(f"Created {len(documents)} chunks")
+
+    return documents
+
+
+def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
+    """
+    Load a document, split into chunks, embed, and store in ChromaDB.
+    Used for CLI ingestion. For web uploads, use prepare_documents() instead.
+
+    Args:
+        file_path: Path to the document file (.txt or .pdf)
+        chunk_size: Size of each text chunk (in characters)
+        chunk_overlap: Overlap between chunks to maintain context
+    """
+    documents = prepare_documents(file_path, chunk_size, chunk_overlap)
 
     # Create embeddings
     print("\nCreating embeddings...")
