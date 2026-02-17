@@ -1,6 +1,17 @@
-# LangChain Chatbot with RAG
+# LangChain Chatbot with Multimodal RAG
 
-A chatbot built with LangChain that supports conversation memory and RAG (Retrieval-Augmented Generation) for chatting with your documents.
+A chatbot built with LangChain that supports conversation memory and **Multimodal RAG** (Retrieval-Augmented Generation) — chat with your documents including **figures, tables, and text** with true visual understanding.
+
+## Key Features
+
+- **Lazy Vision Architecture**: Figures analyzed on-demand at query time via Gemini Vision API
+- **Pydantic-Validated Figures**: Quality scoring and false-positive filtering for figure elements
+- **Zero-API Spatial Synthesis**: Ingestion uses bounding-box text extraction (no API calls, no 429 errors)
+- **Strict Adobe PDF Extract API**: Sole engine for PDF OCR and structural analysis
+- **High-Fidelity Tables**: Converted to clean Markdown with row/column integrity
+- **Web Interface**: Clean, modern chat UI with drag-and-drop document upload
+- **Multi-provider LLM**: Supports LM Studio (local/free), OpenAI, and Google Gemini
+- **Local Embeddings**: Uses HuggingFace sentence-transformers (free, no API keys)
 
 ## Supported LLM Providers
 
@@ -12,224 +23,220 @@ A chatbot built with LangChain that supports conversation memory and RAG (Retrie
 
 ---
 
-## Quick Start with LM Studio (Recommended)
+## Quick Start
 
-### Step 1: Install LM Studio
-
-Download from <https://lmstudio.ai/>
-
-### Step 2: Load a Model in LM Studio
-
-1. Open LM Studio
-2. Go to **Discover** tab
-3. Download a model (recommended: `Qwen2.5-7B-Instruct` or `Llama-3.2-3B-Instruct`)
-4. Go to **Local Server** tab
-5. Select your model and click **Start Server**
-6. Server runs at `http://localhost:1234`
-
-### Step 3: Install Dependencies
+### Step 1: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Configure Environment
+### Step 2: Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
-
-```
-LMSTUDIO_BASE_URL=http://localhost:1234/v1
-```
-
-### Step 5: Run
+Edit `.env` with your credentials:
 
 ```bash
-# Simple chatbot (CLI)
-python3 chatbot.py
+# LLM Provider (choose one)
+LMSTUDIO_BASE_URL=http://localhost:1234/v1
+# OPENAI_API_KEY=sk-your-key-here
+# GOOGLE_API_KEY=your-google-key-here
 
-# RAG chatbot (chat with documents)
-cd rag_system
-python3 ingest.py      # Ingest documents first
-python3 rag_chatbot.py # Start web server (default)
+# Adobe PDF Services (REQUIRED for PDF processing)
+PDF_SERVICES_CLIENT_ID=your_client_id
+PDF_SERVICES_CLIENT_SECRET=your_client_secret
+
+# Vision (optional, for lazy figure analysis at query time)
+GOOGLE_API_KEY=your-google-key-here
+VISION_MODEL_NAME=gemini-2.5-flash
 ```
 
-Open <http://localhost:8080> in your browser to use the web interface.
-You can also upload documents directly through the web UI.
+### Step 3: Run
+
+```bash
+cd rag_system
+python3 rag_chatbot.py
+```
+
+Open <http://localhost:8080> in your browser.
+Upload documents directly through the web UI.
 
 ---
 
-## RAG System (Chat with Documents)
+## How Multimodal RAG Works
 
-### How It Works
+### Ingestion Phase (Zero-API)
 
-1. **Ingest**: Documents are split into chunks and converted to embeddings
-2. **Retrieve**: User questions find relevant chunks via similarity search
-3. **Generate**: LLM answers based on retrieved context
+```
+PDF Document
+    |
+    v
++-------------------------------------------------+
+|       Adobe PDF Extract API (Cloud)             |
+|  Extracts: Text, Tables, Figure Renditions      |
++-------------------------------------------------+
+    |           |              |
+    v           v              v
+  Text       Tables         Figures
+ chunks     (Markdown)     |
+                           v
+              +-------------------------------+
+              | Pydantic Validation           |
+              | (FigureCandidate -> quality   |
+              |  scoring -> reject/accept)    |
+              +-------------------------------+
+                           |
+                           v
+              +-------------------------------+
+              | Spatial Synthesis (default)   |
+              | Scans text INSIDE bounding    |
+              | box, sorts top-to-bottom,     |
+              | combines caption + context    |
+              | ** Zero API calls **          |
+              +-------------------------------+
+    |           |              |
+    +-----------|------------- +
+                v
++-------------------------------------------------+
+|   HuggingFace Embeddings -> ChromaDB            |
+|   Metadata: chunk_type, page, image_path,       |
+|             figure_type, quality_score           |
++-------------------------------------------------+
+```
 
-### Usage
+### Query Phase (Lazy Vision)
 
-1. Place your documents (`.txt` or `.pdf`) in `rag_system/data/`, **or upload them through the web interface**
+```
+User Question
+    |
+    v
++---------------------------------------+
+|  Similarity Search -> Top K Chunks    |
++---------------------------------------+
+    |
+    +-- Text/Table chunks -> Standard LLM prompt
+    |
+    +-- Figure chunks with image_path?
+            |
+            v
+    +----------------------------------+
+    |  Load .png from disk -> Base64   |
+    |  Send to Gemini Vision API       |
+    |  with user's actual question     |
+    |  (question-aware analysis)       |
+    +----------------------------------+
+            |
+            v
+       Multimodal Response
+       (text + visual analysis)
+       Cached for repeat queries
+```
 
-2. Ingest documents  
-   (this step rebuilds the vector database):
+### Chunk Types in ChromaDB
 
-   **Single file ingestion**
+| Type | Content | Metadata |
+|------|---------|----------|
+| `text` | Plain text passage | `source`, `page`, `chunk_type` |
+| `table` | Markdown table | `source`, `page`, `chunk_type` |
+| `figure` | Spatial description + caption + context | `source`, `page`, `chunk_type`, `figure_id`, `image_path`, `figure_type`, `quality_score` |
 
-   ```bash
-   cd rag_system
-   python3 ingest_single_file.py
-   ```
+---
 
-   **Multiple file ingestion**
+## PDF Processing (Adobe-Only)
 
-   ```bash
-   cd rag_system
-   python3 ingest.py
-   ```
+**Adobe PDF Extract API** is the sole engine for PDF processing. No other libraries (PyMuPDF, pdfplumber, pypdf) are used.
 
-3. Chat with your documents:
-
-   **Web Interface (default):**
-
-   ```bash
-   python3 rag_chatbot.py
-   ```
-
-   Open <http://localhost:8080> in your browser.
-
-   **Command Line Interface:**
-
-   ```bash
-   python3 rag_chatbot.py --cli
-   ```
-
-### Example Questions
-
-Based on the sample documents:
-
-- "What is the Chrono Core?" (from Sonic story)
-- "Who are Sonic's friends?"
-- "What happened to Eggman's fortress?"
-- Questions about content from your PDF files
-
-### PDF Processing
-
-The system uses a **smart hybrid approach** for PDF processing:
-
-**1. Automatic Complexity Detection**
-
-- Analyzes PDFs for tables, images, diagrams, and math symbols
-- Automatically selects the best extraction method
-- Samples first 5 pages for fast detection
-
-**2. Dual Extraction Modes**
-
-- **Standard Mode (default):** Fast extraction with `pdfplumber`
-  - ⚡ Lightning fast (0.5s per page)
-  - ✅ Preserves page and line numbers for citations
-  - ✅ Perfect for most modern PDFs
-  - Recommended for development
-
-- **Advanced Mode (optional):** OCR with `Marker`
-  - 📊 Better table structure preservation
-  - 🧮 Enhanced equation handling
-  - 🐢 Slower (~1 min per page on CPU)
-  - ⚠️ Loses page numbers (Marker limitation)
-  - Enable via `.env`: `USE_ADVANCED_OCR=true`
-
-**3. Smart Citations**
-
-- **PDFs:** References like `paper.pdf (p.12, ~L45)`
-- **Text files:** References like `document.txt (~L230)`
-- Approximate line numbers for easy source verification
-
-**Supported PDF types:**
-
-- Text-based PDFs (journal articles, arXiv papers, etc.)
-- Complex layouts with tables, equations, multi-column text
-- Images and diagrams (text extraction only, not visual content)
-
-### Adobe PDF Services (Optional)
-
-For cloud-based OCR processing of scanned PDFs, you can use Adobe PDF Services:
+### Setup
 
 1. Get credentials from [Adobe Developer Console](https://developer.adobe.com/console)
-2. Add to your `.env`:
-
+2. Add to `.env`:
    ```
    PDF_SERVICES_CLIENT_ID=your_client_id
    PDF_SERVICES_CLIENT_SECRET=your_client_secret
-   USE_ADOBE_OCR=true
    ```
+3. SDK is included in `requirements.txt`
 
-3. Install the SDK: `pip install pdfservices-sdk`
+### What Adobe Extracts
 
-When enabled, Adobe PDF Services Extract API is used as the primary PDF extraction method, with local tools as fallback.
+- **Text**: Structured paragraphs, headings, lists with page/bounds metadata
+- **Tables**: Structural JSON converted to clean Markdown
+- **Figure Renditions**: Physical `.png` images saved to `rag_system/assets/figures/`
 
 ---
 
-## Cloud Providers (Alternative)
+## Figure Processing Pipeline
 
-If you prefer cloud APIs, edit `.env`:
+### Pydantic Validation
+
+Every figure element passes through `assess_figure_quality()` which:
+- Rejects elements with area < 2000 pts (icons, decorative elements)
+- Rejects elements with width or height < 30 pts (table fragments, lines)
+- Scores figures 0.0-1.0 based on caption, context, image size, bounds
+- Classifies type: `diagram`, `chart`, `photograph`, `illustration`, etc.
+
+### Spatial Synthesis (Default, Zero-API)
+
+For accepted figures, `_synthesize_text_description()`:
+1. Scans all Adobe elements for text **inside** the figure's bounding box
+2. Sorts internal text top-to-bottom by Y-coordinate (visual reading order)
+3. Combines: `[Figure Type] + [Caption] + [Internal Text Flow] + [Context]`
+
+### Ingestion-Time Vision (Optional)
+
+Set `ENABLE_VISION_INGESTION=true` in `.env` to also call Gemini Vision during ingestion for richer pre-computed descriptions. Off by default to avoid 429 rate-limit errors.
+
+### Lazy Vision at Query Time
+
+When a user asks about a figure:
+1. ChromaDB retrieves the figure chunk with `image_path`
+2. The image is loaded from disk and Base64-encoded
+3. Sent to Gemini Vision with the user's specific question
+4. Response is cached to avoid duplicate API calls
+
+---
+
+## Re-ingestion
+
+**Important**: If you change the ingestion pipeline, delete and rebuild:
 
 ```bash
-# OpenAI
-OPENAI_API_KEY=sk-your-key-here
-
-# OR Google Gemini
-GOOGLE_API_KEY=your-google-key-here
+rm -rf rag_system/chroma_db
+cd rag_system
+python3 ingest.py              # Multi-file ingestion
+# OR
+python3 ingest_single_file.py  # Single-file ingestion
 ```
-
-Remove or comment out `LMSTUDIO_BASE_URL` to use cloud providers.
 
 ---
 
 ## Project Structure
 
 ```
-RAG-SYSTEM/
-├── chatbot.py              # Simple chatbot (no RAG)
+capstone-rag-system/
 ├── requirements.txt
 ├── .env.example
+├── .gitignore
 └── rag_system/
-    ├── ingest.py           # Multi-file ingestion
+    ├── rag_chatbot.py        # RAG chatbot server + lazy Vision
+    ├── adobe_ocr.py          # Adobe PDF Services integration
+    ├── figure_models.py      # Pydantic validation + spatial synthesis
+    ├── ingest.py             # Multi-file ingestion
     ├── ingest_single_file.py # Single-file ingestion
-    ├── rag_chatbot.py      # RAG chatbot server
-    ├── pdf_processor.py    # PDF text extraction (pdfplumber/Marker)
-    ├── adobe_ocr.py        # Adobe PDF Services integration
-    ├── data/               # Place documents here
-    │   └── book.txt
-    ├── static/             # Web frontend
+    ├── pdf_processor.py      # PDF routing (delegates to Adobe)
+    ├── data/                 # Place documents here
+    ├── assets/
+    │   └── figures/          # Extracted figure images (.png)
+    ├── static/               # Web frontend
     │   ├── index.html
     │   ├── styles.css
     │   └── app.js
-    └── chroma_db/          # Vector database (auto-created)
+    └── chroma_db/            # Vector database (auto-created)
 ```
 
-## Features
-
-- **Web Interface**: Clean, modern chat UI accessible at <http://localhost:8080>
-- **Document Upload**: Upload .txt and .pdf files directly through the web UI with drag-and-drop
-- **Local-first**: Run 100% locally with LM Studio (free, no API keys)
-- **RAG Support**: Chat with your documents with source citations
-- **Smart PDF Processing**:
-  - Automatic complexity detection (tables, images, equations)
-  - Page and line number tracking for easy verification
-  - Dual-mode: Fast standard extraction or advanced OCR
-  - Optional Adobe PDF Services for cloud-based OCR
-  - Configurable via `USE_ADVANCED_OCR` and `USE_ADOBE_OCR` settings
-- **Multi-provider**: Supports LM Studio, OpenAI, and Google Gemini
-- **Local Embeddings**: Uses HuggingFace sentence-transformers (free)
-- **Conversation Memory**: Maintains chat context per session
-- **CLI Mode**: Command-line interface available with `--cli` flag
-
-## Server Configuration
-
-Configure via environment variables in `.env`:
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -237,10 +244,12 @@ Configure via environment variables in `.env`:
 | `RAG_SERVER_PORT` | `8080` | Server port |
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
 | `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
-| `USE_ADVANCED_OCR` | `false` | Enable Marker for complex PDFs |
-| `USE_ADOBE_OCR` | `false` | Enable Adobe PDF Services Extract API |
+| `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
+| `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
+| `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
 | `PDF_SERVICES_CLIENT_ID` | - | Adobe API client ID |
 | `PDF_SERVICES_CLIENT_SECRET` | - | Adobe API client secret |
+| `GOOGLE_API_KEY` | - | Gemini API key (for Vision + LLM) |
 
 ## API Endpoints
 
@@ -250,6 +259,7 @@ Configure via environment variables in `.env`:
 | `/api/chat` | POST | Send message, get response |
 | `/api/upload` | POST | Upload and ingest a document |
 | `/api/documents` | GET | List ingested documents |
+| `/api/reset-db` | POST | Reset vector database |
 | `/api/clear` | POST | Clear conversation history |
 | `/api/health` | GET | Health check |
 
@@ -257,32 +267,25 @@ Configure via environment variables in `.env`:
 
 ## Credits & Acknowledgments
 
-This project is built upon the following open-source libraries and tools:
-
 ### Core Frameworks
 
-- **[LangChain](https://github.com/langchain-ai/langchain)** - Framework for building LLM-powered applications
-- **[ChromaDB](https://github.com/chroma-core/chroma)** - Open-source embedding database for vector storage
-
-### Embeddings
-
-- **[HuggingFace Transformers](https://github.com/huggingface/transformers)** - Local embeddings via `sentence-transformers/all-MiniLM-L6-v2`
+- **[LangChain](https://github.com/langchain-ai/langchain)** — Framework for building LLM-powered applications
+- **[ChromaDB](https://github.com/chroma-core/chroma)** — Open-source embedding database
 
 ### PDF Processing
 
-- **[pdfplumber](https://github.com/jsvine/pdfplumber)** - Fast text extraction from PDFs
-- **[Marker](https://github.com/VikParuchuri/marker)** - Advanced PDF to markdown conversion with OCR
+- **[Adobe PDF Services](https://developer.adobe.com/document-services/)** — Cloud-based PDF extraction via Extract API (sole OCR engine)
+
+### Embeddings
+
+- **[HuggingFace Transformers](https://github.com/huggingface/transformers)** — Local embeddings via `sentence-transformers/all-MiniLM-L6-v2`
 
 ### LLM Providers
 
-- **[LM Studio](https://lmstudio.ai/)** - Local LLM inference server
-- **[OpenAI](https://openai.com/)** - GPT models API
-- **[Google Gemini](https://ai.google.dev/)** - Gemini models API
+- **[LM Studio](https://lmstudio.ai/)** — Local LLM inference server
+- **[OpenAI](https://openai.com/)** — GPT models API
+- **[Google Gemini](https://ai.google.dev/)** — Gemini models API (including Vision)
 
 ### Web Framework
 
-- **[Flask](https://github.com/pallets/flask)** - Python web framework for the chat server
-
-### Cloud OCR (Optional)
-
-- **[Adobe PDF Services](https://developer.adobe.com/document-services/)** - Cloud-based PDF text extraction via Extract API
+- **[Flask](https://github.com/pallets/flask)** — Python web framework for the chat server

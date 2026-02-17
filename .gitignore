@@ -1,12 +1,42 @@
-.env
+# ─── Python ─────────────────────────────────────────────
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Virtual Environments ───────────────────────────────
+.venv/
 venv/
 env/
-rag_system/chroma_db/
-chroma_db/
-.claude
+ENV/
+
+# ─── IDE / Editor ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+
+# ─── Environment / Secrets ─────────────────────────────
+.env
+
+# ─── ChromaDB Vector Store ─────────────────────────────
+chroma_db/
+
+# ─── User-uploaded data (keep folder structure) ────────
+rag_system/data/*
+!rag_system/data/.gitkeep
+
+# ─── Extracted figure images (keep folder structure) ───
+rag_system/assets/figures/*
+!rag_system/assets/figures/.gitkeep
+
+# ─── Misc ──────────────────────────────────────────────
+*.log
+*.zip
+*.tmp

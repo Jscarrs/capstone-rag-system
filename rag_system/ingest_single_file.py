@@ -1,3 +1,21 @@
+"""
+Ingest Single File — Strict Adobe-Only Pipeline
+
+Loads a document (text or PDF), splits into LangChain Document chunks,
+and stores in ChromaDB. For PDFs, delegates ALL extraction to adobe_ocr.py.
+
+Chunk Overlap is set to 300 to ensure figure references like "see Figure 2"
+are captured alongside descriptive text.
+
+Metadata Schema for every chunk:
+  - source: filename
+  - path: absolute file path
+  - chunk_type: 'text' | 'table' | 'figure'
+  - page: page number (1-indexed)
+  - figure_id: (figures only) e.g. "Figure[1]"
+  - image_path: (figures only) absolute path to .png rendition
+"""
+
 import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
@@ -5,13 +23,12 @@ from langchain_core.documents import Document
 
 # Load environment variables from parent directory
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(parent_dir, '.env')
+env_path = os.path.join(parent_dir, ".env")
 load_dotenv(env_path)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-USE_MARKER_OCR = os.getenv("USE_MARKER_OCR", os.getenv("USE_ADVANCED_OCR", "false")).lower() == "true"
-USE_ADOBE_OCR = os.getenv("USE_ADOBE_OCR", "false").lower() == "true"
+
 
 def get_embeddings():
     """
@@ -22,69 +39,57 @@ def get_embeddings():
     lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
     openai_key = os.getenv("OPENAI_API_KEY")
     google_key = os.getenv("GOOGLE_API_KEY")
-    
-    # Local embeddings with HuggingFace (free, no API key)
+
     if use_local or lmstudio_url:
         from langchain_huggingface import HuggingFaceEmbeddings
+
         print("[Using Local HuggingFace Embeddings (all-MiniLM-L6-v2)]")
         return HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
     elif openai_key and openai_key != "your_openai_api_key_here":
         from langchain_openai import OpenAIEmbeddings
+
         print("[Using OpenAI Embeddings]")
         return OpenAIEmbeddings(openai_api_key=openai_key)
     elif google_key and google_key != "your_google_api_key_here":
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
         print("[Using Google Gemini Embeddings]")
         return GoogleGenerativeAIEmbeddings(
             model="models/embedding-001",
-            google_api_key=google_key
+            google_api_key=google_key,
         )
     else:
         raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
+            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, "
+            "OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
         )
 
-def split_text(text, chunk_size=1000, chunk_overlap=200):
+
+def split_text(text, chunk_size=1000, chunk_overlap=300):
     """
     Split text into overlapping chunks with position tracking.
 
-    Args:
-        text: The text to split
-        chunk_size: Size of each chunk
-        chunk_overlap: Overlap between chunks
-
-    Returns:
-        List of dicts with 'text' and 'start_pos' keys
+    Overlap of 300 ensures figure references (like 'see Figure 2')
+    are captured alongside descriptive text.
     """
     chunks = []
     start = 0
-    text_length = len(text)
+    length = len(text)
 
-    while start < text_length:
+    while start < length:
         end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append({
-            'text': chunk,
-            'start_pos': start  # Character position in original text
-        })
+        chunks.append({"text": text[start:end], "start_pos": start})
         start += chunk_size - chunk_overlap
 
     return chunks
 
-def prepare_documents(file_path, chunk_size=1000, chunk_overlap=200):
+
+def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
     """
-    Load a document (text or PDF) and split it into LangChain Document chunks.
-    Does NOT write to ChromaDB -- returns documents for the caller to store.
-
-    Args:
-        file_path: Path to the document file (.txt or .pdf)
-        chunk_size: Size of each text chunk (in characters)
-        chunk_overlap: Overlap between chunks to maintain context
-
-    Returns:
-        List of LangChain Document objects ready for embedding/storage
+    Load a document and split into LangChain Document chunks.
+    Does NOT write to ChromaDB — returns documents for the caller.
     """
     from pdf_processor import extract_text_from_pdf, is_pdf_file
 
@@ -92,92 +97,148 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=200):
 
     documents = []
     file_name = os.path.basename(file_path)
-    print(f"\nSplitting text into chunks (size={chunk_size}, overlap={chunk_overlap})...")
 
-    # Handle PDF files
+    print(f"\nProcessing document (chunk_size={chunk_size}, overlap={chunk_overlap})...")
+
     if is_pdf_file(file_path):
-        page_data = extract_text_from_pdf(file_path, force_marker=USE_MARKER_OCR, use_adobe=USE_ADOBE_OCR)
+        # ── Adobe-only structured extraction ──
+        structured_chunks = extract_text_from_pdf(file_path)
 
-        for page_dict in page_data:
-            page_num = page_dict['page']
-            page_text = page_dict['text']
+        for chunk_data in structured_chunks:
+            chunk_type = chunk_data.get("type", "text")
+            page_num = chunk_data.get("page", 1)
+            content = chunk_data.get("content", "")
 
-            chunks = split_text(page_text, chunk_size, chunk_overlap)
+            # ── ZERO-NULL POLICY ──
+            if not content or not content.strip():
+                if chunk_type == "figure":
+                    fig_id = chunk_data.get("figure_id", f"Figure_{page_num}")
+                    content = f"Visual element {fig_id} on page {page_num}"
+                    print(f"  Warning: Using fallback content for {fig_id}")
+                elif chunk_type == "table":
+                    content = f"Table on page {page_num} (content unavailable)"
+                    print(f"  Warning: Using fallback for table on page {page_num}")
+                else:
+                    print(f"  Warning: Skipping empty {chunk_type} on page {page_num}")
+                    continue
 
-            for i, chunk_dict in enumerate(chunks):
-                lines_before = page_text[:chunk_dict['start_pos']].count('\n')
-                start_line = lines_before + 1
+            # ── TEXT: split into sub-chunks ──
+            if chunk_type == "text":
+                text_splits = split_text(content, chunk_size, chunk_overlap)
+                for i, split_dict in enumerate(text_splits):
+                    split_content = split_dict["text"].strip()
+                    if not split_content:
+                        continue
+                    lines_before = content[: split_dict["start_pos"]].count("\n")
+                    documents.append(
+                        Document(
+                            page_content=split_content,
+                            metadata={
+                                "source": file_name,
+                                "path": file_path,
+                                "chunk": i,
+                                "page": page_num,
+                                "chunk_type": "text",
+                                "start_line": lines_before + 1,
+                            },
+                        )
+                    )
 
+            # ── TABLE: single chunk, Markdown ──
+            elif chunk_type == "table":
                 documents.append(
                     Document(
-                        page_content=chunk_dict['text'],
+                        page_content=content.strip(),
                         metadata={
                             "source": file_name,
                             "path": file_path,
-                            "chunk": i,
-                            "page": page_num,  # Can be None for OCR
-                            "start_line": start_line if page_num else None
-                        }
+                            "chunk": 0,
+                            "page": page_num,
+                            "chunk_type": "table",
+                        },
                     )
                 )
 
-        total_chars = sum(len(page_dict.get("text", "")) for page_dict in page_data)
+            # ── FIGURE: single chunk, hybrid content + image_path ──
+            elif chunk_type == "figure":
+                fig_id = chunk_data.get("figure_id", f"Figure_{page_num}")
+                image_path = chunk_data.get("image_path")  # from renditions
 
-    # Handle text files
+                documents.append(
+                    Document(
+                        page_content=content.strip(),
+                        metadata={
+                            "source": file_name,
+                            "path": file_path,
+                            "chunk": 0,
+                            "page": page_num,
+                            "chunk_type": "figure",
+                            "figure_id": fig_id,
+                            "image_path": image_path,   # for multimodal queries
+                        },
+                    )
+                )
+
+        total_chars = sum(
+            len(c.get("content", "")) for c in structured_chunks
+        )
+
     else:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        # ── Plain text files ──
+        with open(file_path, "r", encoding="utf-8") as f:
             text = f.read()
 
         chunks = split_text(text, chunk_size, chunk_overlap)
-
         for i, chunk_dict in enumerate(chunks):
-            lines_before = text[:chunk_dict['start_pos']].count('\n')
-            start_line = lines_before + 1
-
+            chunk_content = chunk_dict["text"].strip()
+            if not chunk_content:
+                continue
+            lines_before = text[: chunk_dict["start_pos"]].count("\n")
             documents.append(
                 Document(
-                    page_content=chunk_dict['text'],
+                    page_content=chunk_content,
                     metadata={
                         "source": file_name,
                         "path": file_path,
                         "chunk": i,
-                        "start_line": start_line
-                    }
+                        "chunk_type": "text",
+                        "start_line": lines_before + 1,
+                    },
                 )
             )
 
         total_chars = len(text)
 
+    # ── Summary ──
     print("Loaded document")
     print(f"Total characters: {total_chars}")
     print(f"Created {len(documents)} chunks")
 
+    txt = sum(1 for d in documents if d.metadata.get("chunk_type") == "text")
+    tbl = sum(1 for d in documents if d.metadata.get("chunk_type") == "table")
+    fig = sum(1 for d in documents if d.metadata.get("chunk_type") == "figure")
+
+    if tbl > 0 or fig > 0:
+        print(f"  - Text chunks: {txt}")
+        print(f"  - Table chunks: {tbl}")
+        print(f"  - Figure chunks (hybrid with context): {fig}")
+
     return documents
 
 
-def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
-    """
-    Load a document, split into chunks, embed, and store in ChromaDB.
-    Used for CLI ingestion. For web uploads, use prepare_documents() instead.
-
-    Args:
-        file_path: Path to the document file (.txt or .pdf)
-        chunk_size: Size of each text chunk (in characters)
-        chunk_overlap: Overlap between chunks to maintain context
-    """
+def ingest_document(file_path, chunk_size=1000, chunk_overlap=300):
+    """Load, chunk, embed, and store in ChromaDB."""
     documents = prepare_documents(file_path, chunk_size, chunk_overlap)
 
-    # Create embeddings
     print("\nCreating embeddings...")
     embeddings = get_embeddings()
 
-    # Create and persist the vector database
     print("Storing in ChromaDB vector database...")
     vectordb = Chroma.from_documents(
         documents=documents,
         embedding=embeddings,
         persist_directory=CHROMA_DIR,
-        collection_metadata={"hnsw:space": "cosine"}
+        collection_metadata={"hnsw:space": "cosine"},
     )
 
     print(f"\n✓ Successfully ingested document!")
@@ -186,10 +247,9 @@ def ingest_document(file_path, chunk_size=1000, chunk_overlap=200):
 
     return vectordb
 
-if __name__ == "__main__":
-    # Example usage - supports both .txt and .pdf files
-    file_path = os.path.join(SCRIPT_DIR, "data", "book.txt")  # Or point to any .txt/.pdf file
 
+if __name__ == "__main__":
+    file_path = os.path.join(SCRIPT_DIR, "data", "book.txt")
     if not os.path.exists(file_path):
         print(f"Error: File not found at {file_path}")
         print(f"Please place your document at {os.path.join(SCRIPT_DIR, 'data')}")

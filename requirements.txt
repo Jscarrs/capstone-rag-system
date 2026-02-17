@@ -11,6 +11,5 @@ chromadb
 sentence-transformers
 flask
 flask-cors
-marker-pdf
-pdfplumber
-pdfservices-sdk
+pdfservices-sdk>=4.0.0
+google-genai

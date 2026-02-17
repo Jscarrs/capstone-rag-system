@@ -11,8 +11,6 @@ load_dotenv(env_path)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-USE_MARKER_OCR = os.getenv("USE_MARKER_OCR", os.getenv("USE_ADVANCED_OCR", "false")).lower() == "true"
-USE_ADOBE_OCR = os.getenv("USE_ADOBE_OCR", "false").lower() == "true"
 
 def get_embeddings():
     """
@@ -47,15 +45,18 @@ def get_embeddings():
             "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
         )
 
-def split_text(text, chunk_size=1000, chunk_overlap=200):
+def split_text(text, chunk_size=1000, chunk_overlap=300):
     """
-    Split text into overlapping chunks with position tracking.
-
+    Split text into overlapping chunks.
+    
+    Increased overlap to 300 to ensure figure references (like 'see Figure 2')
+    are captured alongside descriptive text.
+    
     Args:
-        text: The text to split
-        chunk_size: Size of each chunk
-        chunk_overlap: Overlap between chunks
-
+        text: Text to split
+        chunk_size: Size of each chunk (default: 1000)
+        chunk_overlap: Overlap between chunks (default: 300)
+    
     Returns:
         List of dicts with 'text' and 'start_pos' keys
     """
@@ -93,30 +94,90 @@ def ingest_all_documents(data_dir=DATA_DIR):
             # Handle PDF files
             if is_pdf_file(file_path):
                 try:
-                    page_data = extract_text_from_pdf(file_path, force_marker=USE_MARKER_OCR, use_adobe=USE_ADOBE_OCR)
+                    # Extract structured chunks from PDF
+                    structured_chunks = extract_text_from_pdf(file_path)
                     
-                    # Process each page
-                    for page_dict in page_data:
-                        page_num = page_dict['page']
-                        page_text = page_dict['text']
+                    # Process each structured chunk
+                    for chunk_data in structured_chunks:
+                        chunk_type = chunk_data.get('type', 'text')
+                        page_num = chunk_data.get('page', 1)
+                        content = chunk_data.get('content', '')
                         
-                        # Split page text into chunks
-                        chunks = split_text(page_text)
+                        # CRITICAL SAFETY: Implement fallback for empty content
+                        if not content or not content.strip():
+                            # Fallback for figures
+                            if chunk_type == 'figure':
+                                figure_id = chunk_data.get('figure_id', f'Figure_{page_num}')
+                                content = f'Visual element {figure_id} on page {page_num}'
+                                print(f"  Warning: Using fallback content for {figure_id}")
+                            else:
+                                print(f"  Warning: Skipping empty {chunk_type} chunk on page {page_num}")
+                                continue
                         
-                        for i, chunk_dict in enumerate(chunks):
-                            # Calculate approximate line number from character position
-                            lines_before = page_text[:chunk_dict['start_pos']].count('\n')
-                            start_line = lines_before + 1
+                        # Handle different chunk types
+                        if chunk_type == 'text':
+                            # Split text chunks further for better retrieval
+                            text_splits = split_text(content)
                             
+                            for i, split_dict in enumerate(text_splits):
+                                split_content = split_dict.get('text', '').strip()
+                                if not split_content:  # Skip empty splits
+                                    continue
+                                
+                                # Calculate approximate line number from character position
+                                lines_before = content[:split_dict['start_pos']].count('\n')
+                                start_line = lines_before + 1
+                                
+                                documents.append(
+                                    Document(
+                                        page_content=split_content,
+                                        metadata={
+                                            "source": file,
+                                            "path": file_path,
+                                            "chunk": i,
+                                            "page": page_num,
+                                            "chunk_type": "text",
+                                            "start_line": start_line if page_num else None
+                                        }
+                                    )
+                                )
+                        
+                        elif chunk_type == 'table':
+                            # Store tables as single documents (no splitting)
                             documents.append(
                                 Document(
-                                    page_content=chunk_dict['text'],
+                                    page_content=content.strip(),
                                     metadata={
                                         "source": file,
                                         "path": file_path,
-                                        "chunk": i,
-                                        "page": page_num,  # Can be None for OCR
-                                        "start_line": start_line if page_num else None
+                                        "chunk": 0,
+                                        "page": page_num,
+                                        "chunk_type": "table"
+                                    }
+                                )
+                            )
+                        
+                        elif chunk_type == 'figure':
+                            # Store Pydantic-validated figures with rich descriptions
+                            figure_id = chunk_data.get('figure_id', f'Figure_{page_num}')
+                            figure_type = chunk_data.get('figure_type', 'unknown')
+                            quality_score = chunk_data.get('quality_score', 0.0)
+                            description = chunk_data.get('description', '')
+                            
+                            documents.append(
+                                Document(
+                                    page_content=content.strip(),
+                                    metadata={
+                                        "source": file,
+                                        "path": file_path,
+                                        "chunk": 0,
+                                        "page": page_num,
+                                        "chunk_type": "figure",
+                                        "figure_id": figure_id,
+                                        "figure_type": figure_type,
+                                        "quality_score": quality_score,
+                                        "description": description,
+                                        "image_path": chunk_data.get('image_path', ''),
                                     }
                                 )
                             )
@@ -144,12 +205,22 @@ def ingest_all_documents(data_dir=DATA_DIR):
                                 "source": file,
                                 "path": file_path,
                                 "chunk": i,
+                                "chunk_type": "text",
                                 "start_line": start_line  # Line number in text file
                             }
                         )
                     )
 
     print(f"Total chunks created: {len(documents)}")
+    
+    # Count chunk types
+    text_chunks = sum(1 for d in documents if d.metadata.get('chunk_type') == 'text')
+    table_chunks = sum(1 for d in documents if d.metadata.get('chunk_type') == 'table')
+    figure_chunks = sum(1 for d in documents if d.metadata.get('chunk_type') == 'figure')
+    
+    print(f"  - Text chunks: {text_chunks}")
+    print(f"  - Table chunks: {table_chunks}")
+    print(f"  - Figure chunks: {figure_chunks}")
 
     embeddings = get_embeddings()
 

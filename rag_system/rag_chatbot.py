@@ -35,9 +35,10 @@ env_path = os.path.join(parent_dir, '.env')
 load_dotenv(env_path)
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))  # Configurable threshold
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
 
-print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}]")  # Debug output
+print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}]")
 
 # Get directory of this script for static file serving
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -154,12 +155,22 @@ def build_sources(docs, preview_len=200):
         meta = doc.metadata or {}
         page = meta.get("page")
         start_line = meta.get("start_line")
+        chunk_type = meta.get("chunk_type", "text")
+        figure_id = meta.get("figure_id")
         
-        # Build human-readable reference
+        # Build human-readable reference with chunk type
         ref_parts = []
         if page is not None:
             ref_parts.append(f"p.{page}")
-        if start_line is not None:
+        
+        # Add chunk type indicator for non-text chunks
+        if chunk_type == "table":
+            ref_parts.append("table")
+        elif chunk_type == "figure" and figure_id:
+            ref_parts.append(f"figure: {figure_id}")
+        elif chunk_type == "figure":
+            ref_parts.append("figure")
+        elif start_line is not None:
             ref_parts.append(f"~L{start_line}")
         
         reference = ", ".join(ref_parts) if ref_parts else f"chunk {meta.get('chunk', 'unknown')}"
@@ -168,10 +179,12 @@ def build_sources(docs, preview_len=200):
             "id": i,
             "source": meta.get("source"),
             "path": meta.get("path"),
-            "reference": reference,  # New: human-readable reference
+            "reference": reference,  # Human-readable reference with chunk type
             "page": page,
             "line": start_line,
             "chunk": meta.get("chunk"),
+            "chunk_type": chunk_type,
+            "figure_id": figure_id,
             "preview": doc.page_content[:preview_len]
         })
     return sources
@@ -191,7 +204,7 @@ vectordb = Chroma(
 retriever = vectordb.as_retriever(
     search_type="similarity_score_threshold",
     search_kwargs={
-        "k": 3,
+        "k": RETRIEVAL_K,
         "score_threshold": SIMILARITY_THRESHOLD
     }
 )
@@ -203,6 +216,9 @@ sessions = {}
 SYSTEM_PROMPT = (
     "Answer ONLY using the provided context. "
     "Use chat history only to understand the question (e.g., resolve pronouns), not as a source of facts. "
+    "When a Figure or Table chunk is retrieved, analyze the provided context and captions to explain its visual meaning. "
+    "For tables, interpret the data structure and relationships. For figures, use the caption and surrounding context to describe what the figure shows. "
+    "When an image is provided, analyze its visual structure (arrows, layers, labels, charts, diagrams) to explain the internal data flow or process described in the user's question. "
     "Cite sources like [1], [2]. "
     "If the answer is not in the context, say you don't know."
 )
@@ -220,13 +236,13 @@ def get_or_create_session(session_id):
 def process_query(user_input, session_id="default"):
     """
     Process a user query and return the response with sources.
-    Used by both CLI and web server.
+    Supports MULTIMODAL queries: sends images to Gemini Vision API when figure chunks are retrieved.
     """
     print(f"\n[USER QUERY] {user_input}")
     
     chat_history = get_or_create_session(session_id)
 
-    # Check if vector database is available (may be None after reset)
+    # Check if vector database is available
     if retriever is None:
         return {
             "answer": "No documents have been ingested yet. Please upload a document first.",
@@ -256,30 +272,213 @@ def process_query(user_input, session_id="default"):
             src = meta.get("source", "unknown")
             path = meta.get("path", "unknown")
             chunk_id = meta.get("chunk", "unknown")
+            chunk_type = meta.get("chunk_type", "text")
 
             print(f"\n  Chunk {i}:")
             print(f"  Source: {src}")
             print(f"  Path: {path}")
             print(f"  Chunk: {chunk_id}")
+            print(f"  Type: {chunk_type}")
+            if chunk_type == "figure":
+                print(f"  Figure Type: {meta.get('figure_type', 'N/A')}")
+                print(f"  Quality Score: {meta.get('quality_score', 'N/A')}")
+                desc = meta.get('description', '')
+                if desc:
+                    print(f"  Description: {desc[:150]}...")
             print(f"  {doc.page_content}")
 
         print("[END CHUNKS]\n")
 
-    # Inject retrieved context for this turn without persisting it in session history.
-    rag_prompt = HumanMessage(
-        content=f"Context from document:\n{context}\n\nQuestion: {user_input}"
-    )
+    # DETAILED DIAGNOSTIC LOGGING
+    print(f"\n=== QUERY DIAGNOSTICS ===")
+    print(f"Question: {user_input}")
+    print(f"Retrieved {len(relevant_docs)} chunks")
+    
+    chunk_types = {}
+    for doc in relevant_docs:
+        meta = doc.metadata or {}
+        ctype = meta.get('chunk_type', 'unknown')
+        chunk_types[ctype] = chunk_types.get(ctype, 0) + 1
+    
+    print(f"Chunk types: {chunk_types}")
+    print(f"=========================\n")
 
-    response = llm.invoke(chat_history + [rag_prompt])
+    # ── LAZY VISION: detect figure chunks with images ──
+    figure_images = []
+    for doc in relevant_docs:
+        meta = doc.metadata or {}
+        if meta.get("chunk_type") == "figure":
+            figure_id = meta.get('figure_id', 'Unknown')
+            fig_type = meta.get('figure_type', 'unknown')
+            quality = meta.get('quality_score', 0.0)
+            image_path = meta.get('image_path', '')
+            print(f"  [FIGURE] {figure_id} (type={fig_type}, quality={quality})")
 
+            desc = meta.get('description', '')
+            if desc:
+                print(f"    Description: {desc[:100]}...")
+
+            # Collect images that exist on disk for lazy Vision
+            if image_path and os.path.exists(image_path):
+                figure_images.append({
+                    'figure_id': figure_id,
+                    'image_path': image_path,
+                })
+                print(f"    Image queued for lazy Vision: {os.path.basename(image_path)}")
+            else:
+                print(f"    (No image file — using spatial description only)")
+
+    # Build the query prompt — spatial descriptions are already in the context
+    rag_prompt_text = f"Context from document:\n{context}\n\nQuestion: {user_input}"
+
+    # ── DECIDE PATH: Lazy Vision (multimodal) vs Text-only ──
+    if figure_images and _is_gemini_available():
+        # LAZY VISION PATH: send images + question to Gemini on-the-fly
+        print(f"\nLAZY VISION PATH: Sending {len(figure_images)} figure image(s) to Gemini Vision")
+
+        # Check cache first
+        cache_key = _build_vision_cache_key(figure_images, user_input)
+        cached = _vision_cache.get(cache_key)
+        if cached:
+            print(f"  Cache hit - reusing previous Vision answer")
+            response_text = cached
+        else:
+            # Build multimodal content: text context + images + question
+            images_for_vision = _load_figure_images(figure_images)
+            response_text = _query_gemini_vision(rag_prompt_text, images_for_vision, chat_history)
+            # Cache ONLY successful responses (not errors)
+            if not response_text.startswith("Error"):
+                _vision_cache[cache_key] = response_text
+                print(f"  Cached Vision answer (cache size: {len(_vision_cache)})")
+            else:
+                print(f"  Skipped caching error response")
+    else:
+        # TEXT-ONLY PATH: figure info is embedded as spatial descriptions
+        if figure_images:
+            print(f"\nTEXT PATH: Gemini unavailable - using spatial descriptions")
+        else:
+            print(f"\nTEXT PATH: No figure images - standard LLM query")
+        rag_prompt = HumanMessage(content=rag_prompt_text)
+        response = llm.invoke(chat_history + [rag_prompt])
+        response_text = response.content
+
+    # Update chat history
     chat_history.append(HumanMessage(content=user_input))
-    chat_history.append(response)
+    chat_history.append(SystemMessage(content=response_text))  # Store as system message to avoid confusion
 
     return {
-        "answer": response.content,
+        "answer": response_text,
         "sources": sources,
         "chunks_retrieved": len(relevant_docs)
     }
+
+
+# ── Lazy Vision cache (avoids duplicate API calls for same figure+question) ──
+_vision_cache: dict = {}
+
+
+def _build_vision_cache_key(figure_images: list, question: str) -> str:
+    """Build a deterministic cache key from image paths + question."""
+    import hashlib
+    paths = sorted(img['image_path'] for img in figure_images)
+    raw = f"{':'.join(paths)}|{question.strip().lower()}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _load_figure_images(figure_images: list) -> list:
+    """
+    Read figure image files from disk and return Base64-encoded data
+    ready for Gemini Vision API.
+    """
+    import base64
+    results = []
+    for fig in figure_images:
+        image_path = fig['image_path']
+        figure_id = fig['figure_id']
+        try:
+            with open(image_path, 'rb') as f:
+                img_bytes = f.read()
+            
+            ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+            mime = {
+                'png': 'image/png',
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+            }.get(ext, 'image/png')
+
+            results.append({
+                'data': base64.b64encode(img_bytes).decode('utf-8'),
+                'mime_type': mime,
+                'figure_id': figure_id,
+            })
+            print(f"    Loaded {figure_id}: {os.path.basename(image_path)} ({len(img_bytes)} bytes)")
+        except Exception as e:
+            print(f"    Failed to load {figure_id}: {e}")
+    return results
+
+
+def _is_gemini_available():
+    """Check if Gemini API is configured."""
+    google_key = os.getenv("GOOGLE_API_KEY")
+    return google_key and google_key != "your_google_api_key_here"
+
+
+def _query_gemini_vision(prompt_text, images, chat_history):
+    """
+    Query Gemini Vision API with text and images.
+    
+    Args:
+        prompt_text: The text prompt with context and question
+        images: List of dicts with 'data' (base64), 'mime_type', 'figure_id'
+        chat_history: Chat history for context
+    
+    Returns:
+        Response text from Gemini
+    """
+    from google import genai
+    import base64
+    
+    # Configure Gemini
+    api_key = os.getenv("GOOGLE_API_KEY")
+    client = genai.Client(api_key=api_key)
+    
+    # Build multimodal content parts
+    content_parts = [prompt_text]
+    
+    for img_data in images:
+        try:
+            img_bytes = base64.b64decode(img_data["data"])
+            mime_type = img_data.get("mime_type", "image/png")
+            content_parts.append(genai.types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+            content_parts.append(f"\n[The above image is {img_data['figure_id']}]")
+        except Exception as e:
+            print(f"  Warning: Failed to process image {img_data['figure_id']}: {e}")
+    
+    # Generate response with automatic model fallback on 429
+    vision_model = os.getenv("VISION_MODEL_NAME", "gemini-2.5-flash")
+    fallback_model = "gemini-1.5-flash"
+    models = [vision_model, fallback_model]
+    for model_name in models:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=content_parts,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                ),
+            )
+            if model_name != models[0]:
+                print(f"  Fallback to {model_name} succeeded")
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            is_429 = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+            if is_429 and model_name != models[-1]:
+                print(f"  {model_name} hit 429 - retrying with {models[models.index(model_name) + 1]}...")
+                continue
+            print(f"  Error: Gemini Vision API failed ({model_name}): {e}")
+            return f"Error processing visual content: {error_str}"
+
 
 
 # Flask Routes
@@ -466,7 +665,7 @@ def _reload_vectordb():
     retriever = vectordb.as_retriever(
         search_type="similarity_score_threshold",
         search_kwargs={
-            "k": 3,
+            "k": RETRIEVAL_K,
             "score_threshold": SIMILARITY_THRESHOLD
         }
     )
