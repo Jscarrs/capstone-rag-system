@@ -3,6 +3,7 @@ RAG Chatbot Server
 
 Requirements:
 - Flask for web server
+- API-only backend (frontend served separately)
 - LangChain for RAG pipeline
 - ChromaDB for vector storage
 - Environment variables for LLM configuration
@@ -14,6 +15,7 @@ Environment Variables:
 - USE_LOCAL_EMBEDDINGS: Use local HuggingFace embeddings
 - RAG_SERVER_HOST: Server host (default: 0.0.0.0)
 - RAG_SERVER_PORT: Server port (default: 8080)
+- FRONTEND_ORIGIN: Allowed frontend origin for CORS (default: http://localhost:5173)
 - DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
 - PDF_SERVICES_CLIENT_ID: Adobe PDF Services client ID
 - PDF_SERVICES_CLIENT_SECRET: Adobe PDF Services client secret
@@ -24,9 +26,8 @@ import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 
 # Load environment variables from parent directory
 # (since .env is in project root, not in rag_system folder)
@@ -40,15 +41,18 @@ RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
 
 print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}]")
 
-# Get directory of this script for static file serving
+# Resolve runtime directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
-# Initialize Flask app
-app = Flask(__name__, static_folder=os.path.join(SCRIPT_DIR, 'static'))
-CORS(app)
+# Initialize Flask app (API-only; frontend is separate)
+app = Flask(__name__)
+frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+allowed_origins = [o.strip() for o in frontend_origin.split(",") if o.strip()]
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+print(f"[CORS allowed origins: {allowed_origins}]")
 
 
 def get_llm():
@@ -484,8 +488,12 @@ def _query_gemini_vision(prompt_text, images, chat_history):
 # Flask Routes
 @app.route('/')
 def index():
-    """Serve the frontend HTML page."""
-    return send_from_directory(app.static_folder, 'index.html')
+    """API root endpoint."""
+    return jsonify({
+        "service": "RAG Chatbot API",
+        "status": "ok",
+        "message": "Use /api/* endpoints from the frontend app."
+    })
 
 
 @app.route('/api/chat', methods=['POST'])

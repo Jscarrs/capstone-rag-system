@@ -9,7 +9,7 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 - **Zero-API Spatial Synthesis**: Ingestion uses bounding-box text extraction (no API calls, no 429 errors)
 - **Strict Adobe PDF Extract API**: Sole engine for PDF OCR and structural analysis
 - **High-Fidelity Tables**: Converted to clean Markdown with row/column integrity
-- **Web Interface**: Clean, modern chat UI with drag-and-drop document upload
+- **Separated Frontend/Backend**: React + Vite frontend with API-only Flask backend
 - **Multi-provider LLM**: Supports LM Studio (local/free), OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free, no API keys)
 
@@ -29,12 +29,16 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 
 ```bash
 pip install -r requirements.txt
+cd frontend
+npm install
+cd ..
 ```
 
 ### Step 2: Configure Environment
 
 ```bash
 cp .env.example .env
+cp frontend/.env.example frontend/.env
 ```
 
 Edit `.env` with your credentials:
@@ -49,20 +53,34 @@ LMSTUDIO_BASE_URL=http://localhost:1234/v1
 PDF_SERVICES_CLIENT_ID=your_client_id
 PDF_SERVICES_CLIENT_SECRET=your_client_secret
 
+# CORS allow-list for frontend
+FRONTEND_ORIGIN=http://localhost:5173
+
 # Vision (optional, for lazy figure analysis at query time)
 GOOGLE_API_KEY=your-google-key-here
 VISION_MODEL_NAME=gemini-2.5-flash
 ```
 
+Edit `frontend/.env`:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8080
+```
+
 ### Step 3: Run
 
 ```bash
+# Terminal 1 - backend API
 cd rag_system
 python3 rag_chatbot.py
+
+# Terminal 2 - frontend UI
+cd frontend
+npm run dev
 ```
 
-Open <http://localhost:8080> in your browser.
-Upload documents directly through the web UI.
+Open <http://localhost:5173> in your browser.
+The Flask backend runs on <http://localhost:8080>.
 
 ---
 
@@ -216,6 +234,13 @@ python3 ingest_single_file.py  # Single-file ingestion
 
 ```
 capstone-rag-system/
+├── frontend/
+│   ├── package.json
+│   ├── .env.example
+│   └── src/
+│       ├── App.jsx          # React UI
+│       ├── apiClient.js     # API client with base URL config
+│       └── styles.css       # Frontend styling
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
@@ -229,10 +254,6 @@ capstone-rag-system/
     ├── data/                 # Place documents here
     ├── assets/
     │   └── figures/          # Extracted figure images (.png)
-    ├── static/               # Web frontend
-    │   ├── index.html
-    │   ├── styles.css
-    │   └── app.js
     └── chroma_db/            # Vector database (auto-created)
 ```
 
@@ -242,6 +263,7 @@ capstone-rag-system/
 |----------|---------|-------------|
 | `RAG_SERVER_HOST` | `0.0.0.0` | Server host |
 | `RAG_SERVER_PORT` | `8080` | Server port |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
 | `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
@@ -251,11 +273,17 @@ capstone-rag-system/
 | `PDF_SERVICES_CLIENT_SECRET` | - | Adobe API client secret |
 | `GOOGLE_API_KEY` | - | Gemini API key (for Vision + LLM) |
 
+### Frontend Configuration (`frontend/.env`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API base URL |
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Web interface |
+| `/` | GET | API root/status |
 | `/api/chat` | POST | Send message, get response |
 | `/api/upload` | POST | Upload and ingest a document |
 | `/api/documents` | GET | List ingested documents |

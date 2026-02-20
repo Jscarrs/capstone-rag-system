@@ -40,3 +40,8 @@ rag_system/assets/figures/*
 *.log
 *.zip
 *.tmp
+
+# ─── Frontend (React + Vite) ──────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env

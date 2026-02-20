@@ -49,14 +49,20 @@ A Retrieval-Augmented Generation system that lets you chat with your documents, 
 # 1. Configure credentials
 cp ../.env.example ../.env
 # Edit .env: add PDF_SERVICES_CLIENT_ID, PDF_SERVICES_CLIENT_SECRET, GOOGLE_API_KEY
+cp ../frontend/.env.example ../frontend/.env
 
 # 2. Ingest documents
 python3 ingest.py              # All files in data/
 python3 ingest_single_file.py  # Single file
 
-# 3. Start server
-python3 rag_chatbot.py         # Web UI at http://localhost:8080
+# 3. Start backend API
+python3 rag_chatbot.py         # API at http://localhost:8080
 python3 rag_chatbot.py --cli   # CLI mode
+
+# 4. Start frontend (run from project root in another terminal)
+cd ../frontend
+npm install
+npm run dev                    # UI at http://localhost:5173
 ```
 
 ---
@@ -140,6 +146,7 @@ python3 ingest.py
 |----------|---------|-------------|
 | `SIMILARITY_THRESHOLD` | `0.4` | Minimum similarity score for retrieval |
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
 | `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
 | `chunk_size` | `1000` | Text chunk size in characters (`ingest_single_file.py`) |
