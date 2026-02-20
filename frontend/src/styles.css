@@ -1,11 +1,4 @@
-/*
- * Atlas RAG Console Styles (TMU Theme)
- *
- * Requirements:
- * - Keep visual system centralized with CSS variables.
- * - Support responsive 2-pane desktop layout and stacked mobile layout.
- * - Avoid inline styles and keep all presentation in stylesheet files.
- */
+
 @import url("https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap");
 
 :root {

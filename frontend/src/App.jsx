@@ -1,12 +1,4 @@
-/**
- * Atlas RAG Console UI.
- *
- * Requirements:
- * - Keep frontend and backend separated through HTTP API calls.
- * - Support chat, upload, document listing, chat clear, and database reset.
- * - Surface useful debugging info in the browser console.
- * - Keep interaction flow deterministic (no timeout-based logic).
- */
+
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { 
   Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
