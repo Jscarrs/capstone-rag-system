@@ -7,6 +7,8 @@ Requirements:
 - LangChain for RAG pipeline
 - ChromaDB for vector storage
 - Environment variables for LLM configuration
+- Serve extracted figure images via /api/figures/ for frontend display
+- Include image_url in source data for figure chunks
 
 Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL
@@ -26,7 +28,7 @@ import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 # Load environment variables from parent directory
@@ -45,6 +47,7 @@ print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETR
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+FIGURES_DIR = os.path.join(SCRIPT_DIR, "assets", "figures")
 ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
 # Initialize Flask app (API-only; frontend is separate)
@@ -179,16 +182,23 @@ def build_sources(docs, preview_len=200):
         
         reference = ", ".join(ref_parts) if ref_parts else f"chunk {meta.get('chunk', 'unknown')}"
         
+        image_url = None
+        if chunk_type == "figure":
+            image_path = meta.get("image_path", "")
+            if image_path and os.path.isfile(image_path):
+                image_url = f"/api/figures/{os.path.basename(image_path)}"
+
         sources.append({
             "id": i,
             "source": meta.get("source"),
             "path": meta.get("path"),
-            "reference": reference,  # Human-readable reference with chunk type
+            "reference": reference,
             "page": page,
             "line": start_line,
             "chunk": meta.get("chunk"),
             "chunk_type": chunk_type,
             "figure_id": figure_id,
+            "image_url": image_url,
             "preview": doc.page_content[:preview_len]
         })
     return sources
@@ -537,6 +547,15 @@ def health_check():
         "status": "healthy",
         "vector_db": os.path.exists(CHROMA_DIR)
     })
+
+
+@app.route('/api/figures/<path:filename>', methods=['GET'])
+def serve_figure(filename):
+    """Serve extracted figure images from the assets/figures directory."""
+    safe_name = os.path.basename(filename)
+    if not os.path.isfile(os.path.join(FIGURES_DIR, safe_name)):
+        return jsonify({"error": "Figure not found"}), 404
+    return send_from_directory(FIGURES_DIR, safe_name)
 
 
 @app.route('/api/upload', methods=['POST'])

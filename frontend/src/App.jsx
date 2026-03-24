@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { 
   Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
-  CheckCircle, Info, Bot, User, FileText, Loader2, File
+  CheckCircle, Info, Bot, User, FileText, Loader2, File,
+  Image, ZoomIn
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
 
@@ -33,6 +34,70 @@ function getFileExtension(filename) {
   return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : "";
 }
 
+function buildImageUrl(imageUrl) {
+  if (!imageUrl) return null;
+  return `${API_BASE_URL}${imageUrl}`;
+}
+
+function buildFigureMap(sources) {
+  const map = {};
+  if (!sources) return map;
+  for (const s of sources) {
+    if (s.image_url) {
+      map[s.id] = buildImageUrl(s.image_url);
+    }
+  }
+  return map;
+}
+
+const CITATION_RE = /\[(\d+)\]/g;
+
+function MessageContent({ text, sources, onImageClick }) {
+  const figureMap = useMemo(() => buildFigureMap(sources), [sources]);
+
+  if (Object.keys(figureMap).length === 0) {
+    return <p className="message-text">{text}</p>;
+  }
+
+  const parts = [];
+  let lastIndex = 0;
+  const matches = [...text.matchAll(CITATION_RE)];
+
+  for (const match of matches) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    const citationId = parseInt(match[1], 10);
+    parts.push({ type: "citation", value: match[0], id: citationId });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", value: text.slice(lastIndex) });
+  }
+
+  return (
+    <div className="message-text">
+      {parts.map((part, i) => {
+        if (part.type === "text") {
+          return <span key={i}>{part.value}</span>;
+        }
+        const imageUrl = figureMap[part.id];
+        return (
+          <span key={i}>
+            <span className="citation-ref">{part.value}</span>
+            {imageUrl && (
+              <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
+                <img src={imageUrl} alt={`Figure [${part.id}]`} loading="lazy" />
+                <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   const sessionId = useMemo(createSessionId, []);
   const fileInputRef = useRef(null);
@@ -47,6 +112,9 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+
+  // Lightbox for figure images
+  const [lightboxUrl, setLightboxUrl] = useState(null);
 
   // Toast System
   const [toasts, setToasts] = useState([]);
@@ -373,7 +441,11 @@ export default function App() {
                   </div>
                   
                   <article className="message-card">
-                    <p className="message-text">{message.content}</p>
+                    <MessageContent
+                      text={message.content}
+                      sources={message.sources}
+                      onImageClick={setLightboxUrl}
+                    />
                     {message.sources && message.sources.length > 0 ? (
                       <details className="source-box">
                         <summary>References ({message.sources.length})</summary>
@@ -381,11 +453,27 @@ export default function App() {
                           {message.sources.map((source) => (
                             <li key={`${message.id}_${source.id}`} className="source-item">
                               <p className="source-title">
-                                <FileText size={14} className="source-icon" />
+                                {source.image_url ? (
+                                  <Image size={14} className="source-icon" />
+                                ) : (
+                                  <FileText size={14} className="source-icon" />
+                                )}
                                 <span className="source-id">[{source.id}]</span>{" "}
                                 {formatSourceLabel(source)}
                               </p>
-                              {source.preview ? (
+                              {source.image_url ? (
+                                <div
+                                  className="source-thumbnail"
+                                  onClick={() => setLightboxUrl(buildImageUrl(source.image_url))}
+                                >
+                                  <img
+                                    src={buildImageUrl(source.image_url)}
+                                    alt={formatSourceLabel(source)}
+                                    loading="lazy"
+                                  />
+                                  <span className="source-thumbnail-zoom"><ZoomIn size={14} /></span>
+                                </div>
+                              ) : source.preview ? (
                                 <p className="source-preview">{source.preview}</p>
                               ) : null}
                             </li>
@@ -495,6 +583,21 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Figure Lightbox */}
+      {lightboxUrl && (
+        <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
+          <button className="lightbox-close" onClick={() => setLightboxUrl(null)}>
+            <X size={24} />
+          </button>
+          <img
+            className="lightbox-image"
+            src={lightboxUrl}
+            alt="Figure"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 
