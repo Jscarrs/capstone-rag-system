@@ -7,6 +7,18 @@ import {
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
 
+function useDarkMode() {
+  const [isDark, setIsDark] = useState(() => {
+    return localStorage.getItem("theme") === "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+  }, [isDark]);
+
+  return [isDark, setIsDark];
+}
 const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
 const WELCOME_TEXT = "Hello! Please insert a document and ask questions about its content.";
 
@@ -100,6 +112,7 @@ function MessageContent({ text, sources, onImageClick }) {
 
 export default function App() {
   const sessionId = useMemo(createSessionId, []);
+  const [isDark, setIsDark] = useDarkMode();
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
@@ -339,10 +352,44 @@ export default function App() {
               Intelligent retrieval for academic papers and research data.
             </p>
           </div>
-          <div className="meta-block">
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <button
+              onClick={() => setIsDark(prev => !prev)}
+              title="Toggle dark mode"
+              style={{
+                background: isDark ? "#1e2235" : "#e2e8f0",
+                border: "none",
+                borderRadius: "999px",
+                width: "52px",
+                height: "28px",
+                cursor: "pointer",
+                position: "relative",
+                transition: "background 0.3s ease",
+                flexShrink: 0,
+              }}
+            >
+            <span style={{
+              position: "absolute",
+              top: "3px",
+              left: isDark ? "27px" : "3px",
+              width: "22px",
+              height: "22px",
+              borderRadius: "50%",
+              background: isDark ? "#f0b429" : "#004c9b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "12px",
+              transition: "left 0.3s ease, background 0.3s ease",
+          }}>
+              {isDark ? "🌙" : "☀️"}
+             </span>
+            </button>
+            <div className="meta-block">
             <span className="meta-label">Backend</span>
             <code className="meta-value">{API_BASE_URL}</code>
-          </div>
+            </div>
+            </div>
         </header>
 
         <main className="layout">
