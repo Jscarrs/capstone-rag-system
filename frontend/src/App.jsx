@@ -8,7 +8,7 @@ import {
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
 
 const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
-const WELCOME_TEXT = "Hello! Ask questions about your ingested documents.";
+const WELCOME_TEXT = "Hello! Please insert a document and ask questions about its content.";
 
 function createMessage(role, content, sources = []) {
   return {
@@ -518,7 +518,7 @@ export default function App() {
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask a question about your ingested data..."
+                placeholder="What would you like to know?"
                 autoComplete="off"
                 disabled={isSending}
                 rows={1}
