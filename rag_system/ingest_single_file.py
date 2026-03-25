@@ -17,73 +17,9 @@ Metadata Schema for every chunk:
 """
 
 import os
-from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-
-# Load environment variables from parent directory
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(parent_dir, ".env")
-load_dotenv(env_path)
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-
-
-def get_embeddings():
-    """
-    Initialize embeddings based on available configuration.
-    Priority: HuggingFace (local) > OpenAI > Google Gemini
-    """
-    use_local = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-
-    if use_local or lmstudio_url:
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        print("[Using Local HuggingFace Embeddings (all-MiniLM-L6-v2)]")
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import OpenAIEmbeddings
-
-        print("[Using OpenAI Embeddings]")
-        return OpenAIEmbeddings(openai_api_key=openai_key)
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-        print("[Using Google Gemini Embeddings]")
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_key,
-        )
-    else:
-        raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, "
-            "OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
-
-
-def split_text(text, chunk_size=1000, chunk_overlap=300):
-    """
-    Split text into overlapping chunks with position tracking.
-
-    Overlap of 300 ensures figure references (like 'see Figure 2')
-    are captured alongside descriptive text.
-    """
-    chunks = []
-    start = 0
-    length = len(text)
-
-    while start < length:
-        end = start + chunk_size
-        chunks.append({"text": text[start:end], "start_pos": start})
-        start += chunk_size - chunk_overlap
-
-    return chunks
+from shared import get_embeddings, split_text, SCRIPT_DIR, CHROMA_DIR
 
 
 def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):

@@ -21,21 +21,14 @@ Environment Variables:
 - DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
 - PDF_SERVICES_CLIENT_ID: Adobe PDF Services client ID
 - PDF_SERVICES_CLIENT_SECRET: Adobe PDF Services client secret
-- USE_ADOBE_OCR: Use Adobe PDF Services for OCR (default: false)
 """
 
 import os
-from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-
-# Load environment variables from parent directory
-# (since .env is in project root, not in rag_system folder)
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(parent_dir, '.env')
-load_dotenv(env_path)
+from shared import get_llm, get_embeddings, CHROMA_DIR, DATA_DIR, FIGURES_DIR
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
@@ -43,11 +36,6 @@ RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
 
 print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}]")
 
-# Resolve runtime directories
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-DATA_DIR = os.path.join(SCRIPT_DIR, "data")
-FIGURES_DIR = os.path.join(SCRIPT_DIR, "assets", "figures")
 ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
 # Initialize Flask app (API-only; frontend is separate)
@@ -57,78 +45,6 @@ allowed_origins = [o.strip() for o in frontend_origin.split(",") if o.strip()]
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 print(f"[CORS allowed origins: {allowed_origins}]")
 
-
-def get_llm():
-    """
-    Initialize the LLM based on available configuration.
-    Priority: LM Studio (local) > OpenAI > Google Gemini
-    """
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-    
-    # LM Studio (local, no API key needed)
-    if lmstudio_url:
-        from langchain_openai import ChatOpenAI
-        print(f"[Using LM Studio at {lmstudio_url}]")
-        return ChatOpenAI(
-            base_url=lmstudio_url,
-            api_key="lm-studio",  # LM Studio doesn't need a real key
-            temperature=0.7
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import ChatOpenAI
-        print("[Using OpenAI GPT-3.5-turbo]")
-        return ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            openai_api_key=openai_key
-        )
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        print("[Using Google Gemini 2.5 Flash]")
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.7,
-            google_api_key=google_key
-        )
-    else:
-        raise ValueError(
-            "No LLM configured. Set LMSTUDIO_BASE_URL, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
-
-def get_embeddings():
-    """
-    Initialize embeddings based on available configuration.
-    Priority: HuggingFace (local) > OpenAI > Google Gemini
-    """
-    use_local = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-    
-    # Local embeddings with HuggingFace (free, no API key)
-    if use_local or lmstudio_url:
-        from langchain_huggingface import HuggingFaceEmbeddings
-        print("[Using Local HuggingFace Embeddings (all-MiniLM-L6-v2)]")
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import OpenAIEmbeddings
-        print("[Using OpenAI Embeddings]")
-        return OpenAIEmbeddings(openai_api_key=openai_key)
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        print("[Using Google Gemini Embeddings]")
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_key
-        )
-    else:
-        raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
 
 # Helpers
 def format_docs_with_citations(docs):
@@ -679,23 +595,6 @@ def reset_database():
         "status": "success",
         "message": "Database and uploaded documents cleared successfully."
     })
-
-
-def _reload_vectordb():
-    """Reload the vector database to pick up newly ingested documents."""
-    global vectordb, retriever
-    vectordb = Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=embeddings,
-        collection_metadata={"hnsw:space": "cosine"}
-    )
-    retriever = vectordb.as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={
-            "k": RETRIEVAL_K,
-            "score_threshold": SIMILARITY_THRESHOLD
-        }
-    )
 
 
 def chat_cli():
