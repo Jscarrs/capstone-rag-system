@@ -1,5 +1,7 @@
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Children, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { 
   Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
   CheckCircle, Info, Bot, User, FileText, Loader2, File,
@@ -64,48 +66,67 @@ function buildFigureMap(sources) {
 
 const CITATION_RE = /\[(\d+)\]/g;
 
-function MessageContent({ text, sources, onImageClick }) {
+function injectCitations(children, figureMap, onImageClick) {
+  return Children.map(children, (child) => {
+    if (typeof child !== "string") return child;
+
+    const matches = [...child.matchAll(CITATION_RE)];
+    if (matches.length === 0) return child;
+
+    const parts = [];
+    let lastIndex = 0;
+
+    for (const match of matches) {
+      if (match.index > lastIndex) {
+        parts.push(child.slice(lastIndex, match.index));
+      }
+      const citationId = parseInt(match[1], 10);
+      const imageUrl = figureMap[citationId];
+      parts.push(
+        <span key={`c${match.index}`}>
+          <span className="citation-ref">{match[0]}</span>
+          {imageUrl && (
+            <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
+              <img src={imageUrl} alt={`Figure [${citationId}]`} loading="lazy" />
+              <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
+            </span>
+          )}
+        </span>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < child.length) {
+      parts.push(child.slice(lastIndex));
+    }
+
+    return <>{parts}</>;
+  });
+}
+
+function MessageContent({ text, sources, onImageClick, role }) {
   const figureMap = useMemo(() => buildFigureMap(sources), [sources]);
 
-  if (Object.keys(figureMap).length === 0) {
+  if (role === "user") {
     return <p className="message-text">{text}</p>;
   }
 
-  const parts = [];
-  let lastIndex = 0;
-  const matches = [...text.matchAll(CITATION_RE)];
+  const mdComponents = useMemo(() => {
+    const hasFigures = Object.keys(figureMap).length > 0;
+    if (!hasFigures) return {};
 
-  for (const match of matches) {
-    if (match.index > lastIndex) {
-      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
-    }
-    const citationId = parseInt(match[1], 10);
-    parts.push({ type: "citation", value: match[0], id: citationId });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    parts.push({ type: "text", value: text.slice(lastIndex) });
-  }
+    const wrap = (Tag) =>
+      function CitationWrap({ children }) {
+        return <Tag>{injectCitations(children, figureMap, onImageClick)}</Tag>;
+      };
+
+    return { p: wrap("p"), li: wrap("li"), td: wrap("td") };
+  }, [figureMap, onImageClick]);
 
   return (
-    <div className="message-text">
-      {parts.map((part, i) => {
-        if (part.type === "text") {
-          return <span key={i}>{part.value}</span>;
-        }
-        const imageUrl = figureMap[part.id];
-        return (
-          <span key={i}>
-            <span className="citation-ref">{part.value}</span>
-            {imageUrl && (
-              <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
-                <img src={imageUrl} alt={`Figure [${part.id}]`} loading="lazy" />
-                <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
-              </span>
-            )}
-          </span>
-        );
-      })}
+    <div className="message-text markdown-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -492,6 +513,7 @@ export default function App() {
                       text={message.content}
                       sources={message.sources}
                       onImageClick={setLightboxUrl}
+                      role={message.role}
                     />
                     {message.sources && message.sources.length > 0 ? (
                       <details className="source-box">
