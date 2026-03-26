@@ -48,37 +48,49 @@
 }
 
 [data-theme="dark"] {
-  --tmu-blue: #4da3ff;
-  --tmu-gold: #f0b429;
-  --tmu-secondary-blue: #38bdf8;
-  --ink-900: #f0f1f5;
-  --ink-700: #c8cad8;
-  --ink-500: #7a7f9a;
-  --sand-100: #1a1c25;
-  --sand-200: #1e2235;
-  --sand-300: #2a2d3a;
-  --danger-500: #f87171;
-  --success-500: #34d399;
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.4);
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --bg-shell: rgba(16, 18, 26, 0.95);
-  --bg-card: #161924;
-  --bg-card-alt: #1a1c25;
-  --bg-input: #161924;
-  --bg-form: #10121a;
-  --bg-doc-item: #161924;
-  --bg-doc-hover: #1e2235;
-  --bg-toast: #1e2235;
-  --bg-shell: rgba(29, 35, 62, 0.95);
-  --bg-modal: #161924;
-  --bg-source-item: #1a1c25;
-  --bg-source-preview: #10121a;
-  --text-primary: #f0f1f5;
-  --text-secondary: #c8cad8;
-  --text-muted: #7a7f9a;
-  --border-default: #1e2235;
-  --border-input: #2a2d3a;
-  --shell-border: rgba(255, 255, 255, 0.06);
+  /* Official TMU Brand Colors - kept distinct and strictly un-tinted */
+  --tmu-blue: #004c9b;
+  --tmu-gold: #e0ac00; /* Tuned down from #ffdc00 for better dark mode viewing */
+  --tmu-secondary-blue: #5BC2F4;
+  
+  /* Clean Academic Neutrals */
+  --ink-900: #f4f6f8; /* Off-white text */
+  --ink-700: #cbd5e1; /* Secondary text */
+  --ink-500: #8ba1b5; /* Muted text */
+  --sand-100: #242933; /* Slightly lighter than card */
+  --sand-200: #2e3542; /* Borders / Divides */
+  --sand-300: #3c4656;
+  
+  --danger-500: #e06c75;
+  --success-500: #98c379;
+  
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.4);
+  
+  /* Clean Dark Surfaces */
+  --bg-shell: rgba(22, 26, 34, 0.95);
+  --bg-card: #1c212b;
+  --bg-card-alt: #242933;
+  --bg-input: #11141a;
+  --bg-form: #1c212b;
+  --bg-doc-item: #1c212b;
+  --bg-doc-hover: #242933;
+  --bg-toast: #242933;
+  --bg-modal: #1c212b;
+  --bg-source-item: #242933;
+  --bg-source-preview: #1a1e26;
+  
+  --text-primary: var(--ink-900);
+  --text-secondary: var(--ink-700);
+  --text-muted: var(--ink-500);
+  --border-default: var(--sand-200);
+  --border-input: var(--sand-300);
+  --shell-border: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .source-id,
+[data-theme="dark"] .citation-ref {
+  color: var(--tmu-secondary-blue);
 }
 
 * {
@@ -131,15 +143,15 @@ body {
 }
 
 html[data-theme="dark"] ::-webkit-scrollbar-track {
-  background: #20294f;
+  background: var(--bg-card-alt);
 }
 
 html[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: #171820;
+  background: var(--sand-300);
 }
 
 html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: #0f1223;
+  background: var(--ink-500);
 }
 
 .app-shell {
@@ -381,7 +393,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .doc-meta {
   font-size: 0.74rem;
-  color: var(--ink-700);
+  color: var(--tmu-blue); /* TMU Blue text on TMU Gold background matches brand and themes seamlessly */
   background: var(--tmu-gold);
   border-radius: 999px;
   padding: 0.12rem 0.42rem;
