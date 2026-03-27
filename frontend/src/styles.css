@@ -45,6 +45,13 @@
   --border-default: var(--sand-200);
   --border-input: var(--sand-300);
   --shell-border: rgba(255, 255, 255, 0.9);
+  --bg-user-bubble: var(--tmu-blue);
+  --text-user-bubble: #ffffff;
+  --border-user-bubble: var(--tmu-blue);
+  --bg-primary-btn: var(--tmu-blue);
+  --text-primary-btn: #ffffff;
+  --bg-doc-badge: var(--tmu-gold);
+  --text-doc-badge: var(--tmu-blue);
 }
 
 [data-theme="dark"] {
@@ -86,6 +93,13 @@
   --border-default: var(--sand-200);
   --border-input: var(--sand-300);
   --shell-border: rgba(255, 255, 255, 0.1);
+  --bg-user-bubble: #1b5a96;
+  --text-user-bubble: #ffffff;
+  --border-user-bubble: #2868a8;
+  --bg-primary-btn: #1b5a96;
+  --text-primary-btn: #ffffff;
+  --bg-doc-badge: rgba(224, 172, 0, 0.15);
+  --text-doc-badge: var(--tmu-gold);
 }
 
 [data-theme="dark"] .source-id,
@@ -167,20 +181,11 @@ body::before {
   background: var(--ink-500);
 }
 
-html[data-theme="dark"] ::-webkit-scrollbar-track {
-  background: var(--bg-card-alt);
-}
 
-html[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: var(--sand-300);
-}
-
-html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-500);
-}
 
 .app-shell {
   width: min(1200px, calc(100vw - 2.4rem));
+  height: calc(100vh - 2.4rem);
   margin: 1.2rem auto;
   padding: 1.1rem;
   border-radius: 24px;
@@ -188,6 +193,8 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   backdrop-filter: blur(8px);
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--shell-border);
+  display: flex;
+  flex-direction: column;
 }
 
 .app-header {
@@ -198,6 +205,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   padding: 1rem 1rem 1.2rem;
   border-bottom: 3px solid var(--tmu-gold);
   margin-bottom: 1rem;
+  flex-shrink: 0;
 }
 
 .eyebrow {
@@ -253,11 +261,13 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   display: grid;
   grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
   gap: 1rem;
-  min-height: 76vh;
+  flex: 1;
+  min-height: 0;
   margin-bottom: 1rem;
 }
 
 .app-footer {
+  flex-shrink: 0;
   text-align: center;
   padding-top: 1rem;
   margin-top: 0.5rem;
@@ -267,12 +277,16 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .side-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.9rem;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .panel-card {
-  background: var(--bg-card);
+  flex-shrink: 0;
+  background-color: var(--bg-card);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 1rem;
@@ -306,7 +320,11 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   justify-content: center;
   gap: 0.4rem;
   cursor: pointer;
-  transition: all 180ms ease;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 180ms ease,
+              box-shadow 180ms ease;
 }
 
 .dropzone-icon {
@@ -418,8 +436,8 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .doc-meta {
   font-size: 0.74rem;
-  color: var(--tmu-blue); /* TMU Blue text on TMU Gold background matches brand and themes seamlessly */
-  background: var(--tmu-gold);
+  color: var(--text-doc-badge);
+  background: var(--bg-doc-badge);
   border-radius: 999px;
   padding: 0.12rem 0.42rem;
   font-weight: 600;
@@ -462,8 +480,8 @@ button {
 }
 
 .primary-btn {
-  background: var(--tmu-blue);
-  color: #fff;
+  background-color: var(--bg-primary-btn);
+  color: var(--text-primary-btn);
   min-width: 110px;
 }
 
@@ -479,7 +497,7 @@ button {
 }
 
 .primary-btn:hover {
-  background: var(--tmu-gold);
+  background-color: var(--tmu-gold);
   color: var(--tmu-blue);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(255, 220, 0, 0.3);
@@ -504,7 +522,7 @@ button {
 .chat-panel {
   display: flex;
   flex-direction: column;
-  background: var(--bg-card);
+  background-color: var(--bg-card);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   min-height: 0;
@@ -513,7 +531,6 @@ button {
 }
 
 .messages {
-  background: var(--bg-card);
   flex: 1;
   overflow: auto;
   padding: 1.25rem 1rem;
@@ -567,15 +584,15 @@ button {
 .message-card {
   border-radius: var(--radius-lg);
   padding: 0.75rem 1rem;
-  background: var(--sand-100);
+  background-color: var(--sand-100);
   border: 1px solid rgba(0, 76, 155, 0.1);
   box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .message-row.user .message-card {
-  background: var(--tmu-blue);
-  color: #fff;
-  border-color: var(--tmu-blue);
+  background-color: var(--bg-user-bubble);
+  color: var(--text-user-bubble);
+  border-color: var(--border-user-bubble);
   border-top-right-radius: 4px;
 }
 
@@ -811,7 +828,9 @@ button {
   overflow: hidden;
   border: 1px solid var(--sand-200);
   max-width: 240px;
-  transition: box-shadow 0.2s;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s;
 }
 
 .inline-figure:hover {
@@ -837,7 +856,9 @@ button {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.2s;
 }
 
 .inline-figure:hover .inline-figure-zoom {
@@ -852,7 +873,9 @@ button {
   overflow: hidden;
   border: 1px solid var(--sand-200);
   max-width: 200px;
-  transition: box-shadow 0.2s;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s;
 }
 
 .source-thumbnail:hover {
@@ -878,7 +901,9 @@ button {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.2s;
 }
 
 .source-thumbnail:hover .source-thumbnail-zoom {
@@ -919,7 +944,9 @@ button {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              background 0.2s;
 }
 
 .lightbox-close:hover {
@@ -932,7 +959,7 @@ button {
   align-items: flex-end;
   border-top: 1px solid var(--border-default);
   padding: 0.82rem;
-  background: var(--bg-form);
+  background-color: var(--bg-form);
   border-bottom-left-radius: var(--radius-lg);
   border-bottom-right-radius: var(--radius-lg);
 }
@@ -943,7 +970,7 @@ button {
   border: 1px solid var(--sand-300);
   border-radius: var(--radius-md);
   padding: 0.75rem 0.85rem;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   font-size: 0.95rem;
   color: var(--text-primary);
   transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1), color 0.6s cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms ease, box-shadow 150ms ease;
@@ -1067,7 +1094,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 150ms ease;
+  transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .toast-close:hover {
@@ -1247,6 +1276,8 @@ button {
     width: calc(100vw - 1.2rem);
     margin: 0.6rem auto;
     padding: 0.72rem;
+    height: auto;
+    min-height: calc(100vh - 1.2rem);
   }
 
   .app-header {
@@ -1263,8 +1294,13 @@ button {
     min-height: 0;
   }
 
+  .side-panel {
+    overflow-y: visible;
+  }
+
   .chat-panel {
-    min-height: 65vh;
+    height: 65vh;
+    min-height: auto;
   }
   
   .message-row {

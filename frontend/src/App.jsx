@@ -24,6 +24,42 @@ function useDarkMode() {
 const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
 const WELCOME_TEXT = "Hello! Please insert a document and ask questions about its content.";
 
+const STORAGE_KEY_SESSION = "rag_session_id";
+const STORAGE_KEY_MESSAGES = "rag_messages";
+
+function loadStoredSession() {
+  const stored = sessionStorage.getItem(STORAGE_KEY_SESSION);
+  if (stored) return stored;
+  const fresh = createSessionId();
+  sessionStorage.setItem(STORAGE_KEY_SESSION, fresh);
+  return fresh;
+}
+
+function loadStoredMessages() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY_MESSAGES);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch (e) {
+    console.error("[storage] failed to parse stored messages:", e);
+  }
+  return null;
+}
+
+function saveMessages(messages) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(messages));
+  } catch (e) {
+    console.error("[storage] failed to save messages:", e);
+  }
+}
+
+function clearStoredChat() {
+  sessionStorage.removeItem(STORAGE_KEY_SESSION);
+  sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
+}
+
 function createMessage(role, content, sources = []) {
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
@@ -132,13 +168,15 @@ function MessageContent({ text, sources, onImageClick, role }) {
 }
 
 export default function App() {
-  const sessionId = useMemo(createSessionId, []);
+  const sessionId = useMemo(loadStoredSession, []);
   const [isDark, setIsDark] = useDarkMode();
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const [messages, setMessages] = useState([createMessage("assistant", WELCOME_TEXT)]);
+  const [messages, setMessages] = useState(
+    () => loadStoredMessages() || [createMessage("assistant", WELCOME_TEXT)]
+  );
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
 
@@ -192,6 +230,10 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    saveMessages(messages);
+  }, [messages]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -259,6 +301,7 @@ export default function App() {
   async function handleClearChat() {
     try {
       await apiPost("/api/clear", { session_id: sessionId });
+      clearStoredChat();
       setMessages([createMessage("assistant", WELCOME_TEXT)]);
       console.log("[chat] cleared");
       addToast("success", "Chat cleared successfully.");
@@ -318,6 +361,8 @@ export default function App() {
 
     try {
       const result = await apiPost("/api/reset-db");
+      clearStoredChat();
+      setMessages([createMessage("assistant", WELCOME_TEXT)]);
       addToast("success", result.message || "Database cleared.");
       await loadDocuments();
       console.log("[reset] success");
