@@ -3,6 +3,20 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from shared import get_embeddings, split_text, DATA_DIR, CHROMA_DIR
 
+
+def _extract_bounds_metadata(chunk_data):
+    """Extract bounding box fields from chunk data for ChromaDB storage."""
+    bounds = chunk_data.get("bounds", [])
+    if bounds and len(bounds) >= 4:
+        return {
+            "bounds_x_min": float(bounds[0]),
+            "bounds_y_min": float(bounds[1]),
+            "bounds_x_max": float(bounds[2]),
+            "bounds_y_max": float(bounds[3]),
+        }
+    return {}
+
+
 def ingest_all_documents(data_dir=DATA_DIR):
     from pdf_processor import extract_text_from_pdf, is_pdf_file
     
@@ -44,70 +58,66 @@ def ingest_all_documents(data_dir=DATA_DIR):
                         
                         # Handle different chunk types
                         if chunk_type == 'text':
-                            # Split text chunks further for better retrieval
+                            bounds_meta = _extract_bounds_metadata(chunk_data)
                             text_splits = split_text(content)
                             
                             for i, split_dict in enumerate(text_splits):
                                 split_content = split_dict.get('text', '').strip()
-                                if not split_content:  # Skip empty splits
+                                if not split_content:
                                     continue
                                 
-                                # Calculate approximate line number from character position
                                 lines_before = content[:split_dict['start_pos']].count('\n')
                                 start_line = lines_before + 1
                                 
+                                meta = {
+                                    "source": file,
+                                    "path": file_path,
+                                    "chunk": i,
+                                    "page": page_num,
+                                    "chunk_type": "text",
+                                    "start_line": start_line if page_num else None,
+                                    **bounds_meta,
+                                }
                                 documents.append(
-                                    Document(
-                                        page_content=split_content,
-                                        metadata={
-                                            "source": file,
-                                            "path": file_path,
-                                            "chunk": i,
-                                            "page": page_num,
-                                            "chunk_type": "text",
-                                            "start_line": start_line if page_num else None
-                                        }
-                                    )
+                                    Document(page_content=split_content, metadata=meta)
                                 )
                         
                         elif chunk_type == 'table':
-                            # Store tables as single documents (no splitting)
+                            bounds_meta = _extract_bounds_metadata(chunk_data)
+                            meta = {
+                                "source": file,
+                                "path": file_path,
+                                "chunk": 0,
+                                "page": page_num,
+                                "chunk_type": "table",
+                                **bounds_meta,
+                            }
                             documents.append(
-                                Document(
-                                    page_content=content.strip(),
-                                    metadata={
-                                        "source": file,
-                                        "path": file_path,
-                                        "chunk": 0,
-                                        "page": page_num,
-                                        "chunk_type": "table"
-                                    }
-                                )
+                                Document(page_content=content.strip(), metadata=meta)
                             )
                         
                         elif chunk_type == 'figure':
-                            # Store Pydantic-validated figures with rich descriptions
                             figure_id = chunk_data.get('figure_id', f'Figure_{page_num}')
                             figure_type = chunk_data.get('figure_type', 'unknown')
                             quality_score = chunk_data.get('quality_score', 0.0)
                             description = chunk_data.get('description', '')
+                            bounds_meta = _extract_bounds_metadata(chunk_data)
                             
+                            meta = {
+                                "source": file,
+                                "path": file_path,
+                                "chunk": 0,
+                                "page": page_num,
+                                "chunk_type": "figure",
+                                "figure_id": figure_id,
+                                "figure_type": figure_type,
+                                "quality_score": quality_score,
+                                "description": description,
+                                "image_path": chunk_data.get('image_path', ''),
+                                **bounds_meta,
+                            }
                             documents.append(
-                                Document(
-                                    page_content=content.strip(),
-                                    metadata={
-                                        "source": file,
-                                        "path": file_path,
-                                        "chunk": 0,
-                                        "page": page_num,
-                                        "chunk_type": "figure",
-                                        "figure_id": figure_id,
-                                        "figure_type": figure_type,
-                                        "quality_score": quality_score,
-                                        "description": description,
-                                        "image_path": chunk_data.get('image_path', ''),
-                                    }
-                                )
+                                Document(page_content=content.strip(), metadata=meta)
                             )
                             
                 except Exception as e:

@@ -9,6 +9,8 @@ Requirements:
 - Environment variables for LLM configuration
 - Serve extracted figure images via /api/figures/ for frontend display
 - Include image_url in source data for figure chunks
+- Serve original PDF files via /api/documents/<name>/file for PDF viewer
+- Include bounding box coordinates in source data for highlight overlays
 
 Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL
@@ -72,6 +74,19 @@ def format_docs_with_citations(docs):
     return "\n\n".join(parts)
 
 
+def _build_bounds(meta):
+    """Reconstruct bounds dict from stored metadata fields."""
+    x_min = meta.get("bounds_x_min")
+    if x_min is None:
+        return None
+    return {
+        "x_min": float(x_min),
+        "y_min": float(meta.get("bounds_y_min", 0)),
+        "x_max": float(meta.get("bounds_x_max", 0)),
+        "y_max": float(meta.get("bounds_y_max", 0)),
+    }
+
+
 def build_sources(docs, preview_len=200):
     sources = []
     for i, doc in enumerate(docs, 1):
@@ -115,7 +130,8 @@ def build_sources(docs, preview_len=200):
             "chunk_type": chunk_type,
             "figure_id": figure_id,
             "image_url": image_url,
-            "preview": doc.page_content[:preview_len]
+            "preview": doc.page_content[:preview_len],
+            "bounds": _build_bounds(meta),
         })
     return sources
 
@@ -472,6 +488,16 @@ def serve_figure(filename):
     if not os.path.isfile(os.path.join(FIGURES_DIR, safe_name)):
         return jsonify({"error": "Figure not found"}), 404
     return send_from_directory(FIGURES_DIR, safe_name)
+
+
+@app.route('/api/documents/<path:filename>/file', methods=['GET'])
+def serve_document_file(filename):
+    """Serve an original document file (PDF/TXT) for the frontend PDF viewer."""
+    safe_name = os.path.basename(filename)
+    file_path = os.path.join(DATA_DIR, safe_name)
+    if not os.path.isfile(file_path):
+        return jsonify({"error": "Document not found"}), 404
+    return send_from_directory(DATA_DIR, safe_name)
 
 
 @app.route('/api/upload', methods=['POST'])

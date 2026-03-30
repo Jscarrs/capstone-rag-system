@@ -13,8 +13,10 @@ Capabilities:
   5. Zero-Null Policy → page_content is NEVER empty
   6. Multimodal Integration Helper → Base64 encoder for LLM prompts
   [
-    {'type': 'text',   'page': int, 'content': str, 'order': int},
-    {'type': 'table',  'page': int, 'content': str (markdown), 'order': int},
+    {'type': 'text',   'page': int, 'content': str, 'order': int,
+     'bounds': [x_min, y_min, x_max, y_max]},
+    {'type': 'table',  'page': int, 'content': str (markdown), 'order': int,
+     'bounds': [x_min, y_min, x_max, y_max]},
     {'type': 'figure', 'page': int, 'content': str (hybrid),   'order': int,
      'figure_id': str, 'image_path': str|None},
   ]
@@ -347,7 +349,6 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
     chunks = _sort_by_reading_order(chunks)
     for i, c in enumerate(chunks):
         c["order"] = i
-        c.pop("bounds", None)
 
     return chunks
 

@@ -5,9 +5,10 @@ import remarkGfm from "remark-gfm";
 import { 
   Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
   CheckCircle, Info, Bot, User, FileText, Loader2, File,
-  Image, ZoomIn
+  Image, ZoomIn, BookOpen
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
+import PdfViewer from "./PdfViewer";
 
 function useDarkMode() {
   const [isDark, setIsDark] = useState(() => {
@@ -102,7 +103,7 @@ function buildFigureMap(sources) {
 
 const CITATION_RE = /\[(\d+)\]/g;
 
-function injectCitations(children, figureMap, onImageClick) {
+function injectCitations(children, figureMap, onImageClick, onCitationClick) {
   return Children.map(children, (child) => {
     if (typeof child !== "string") return child;
 
@@ -120,7 +121,13 @@ function injectCitations(children, figureMap, onImageClick) {
       const imageUrl = figureMap[citationId];
       parts.push(
         <span key={`c${match.index}`}>
-          <span className="citation-ref">{match[0]}</span>
+          <span
+            className="citation-ref clickable"
+            onClick={() => onCitationClick?.(citationId)}
+            title="View in PDF"
+          >
+            {match[0]}
+          </span>
           {imageUrl && (
             <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
               <img src={imageUrl} alt={`Figure [${citationId}]`} loading="lazy" />
@@ -139,7 +146,7 @@ function injectCitations(children, figureMap, onImageClick) {
   });
 }
 
-function MessageContent({ text, sources, onImageClick, role }) {
+function MessageContent({ text, sources, onImageClick, onCitationClick, role }) {
   const figureMap = useMemo(() => buildFigureMap(sources), [sources]);
 
   if (role === "user") {
@@ -147,16 +154,16 @@ function MessageContent({ text, sources, onImageClick, role }) {
   }
 
   const mdComponents = useMemo(() => {
-    const hasFigures = Object.keys(figureMap).length > 0;
-    if (!hasFigures) return {};
+    const hasCitations = sources && sources.length > 0;
+    if (!hasCitations) return {};
 
     const wrap = (Tag) =>
       function CitationWrap({ children }) {
-        return <Tag>{injectCitations(children, figureMap, onImageClick)}</Tag>;
+        return <Tag>{injectCitations(children, figureMap, onImageClick, onCitationClick)}</Tag>;
       };
 
     return { p: wrap("p"), li: wrap("li"), td: wrap("td") };
-  }, [figureMap, onImageClick]);
+  }, [figureMap, onImageClick, onCitationClick, sources]);
 
   return (
     <div className="message-text markdown-body">
@@ -187,6 +194,36 @@ export default function App() {
 
   // Lightbox for figure images
   const [lightboxUrl, setLightboxUrl] = useState(null);
+
+  // PDF Viewer state
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerUrl, setPdfViewerUrl] = useState(null);
+  const [pdfViewerSources, setPdfViewerSources] = useState([]);
+  const [pdfFocusedSource, setPdfFocusedSource] = useState(null);
+  const [pdfViewerDocName, setPdfViewerDocName] = useState(null);
+
+  const openPdfViewer = useCallback((docName, sources, focusId) => {
+    const url = `${API_BASE_URL}/api/documents/${encodeURIComponent(docName)}/file`;
+    setPdfViewerUrl(url);
+    setPdfViewerDocName(docName);
+    setPdfViewerSources(sources || []);
+    setPdfFocusedSource(focusId ?? null);
+    setPdfViewerOpen(true);
+    console.log("[pdf-viewer] open", docName, "focus:", focusId);
+  }, []);
+
+  const handleCitationClick = useCallback((sourceId, messageSources) => {
+    if (!messageSources) return;
+    const src = messageSources.find((s) => s.id === sourceId);
+    if (!src?.source) return;
+    const ext = (src.source.split(".").pop() || "").toLowerCase();
+    if (ext !== "pdf") return;
+    openPdfViewer(src.source, messageSources, sourceId);
+  }, [openPdfViewer]);
+
+  const handleHighlightClick = useCallback((sourceId) => {
+    setPdfFocusedSource(sourceId);
+  }, []);
 
   // Toast System
   const [toasts, setToasts] = useState([]);
@@ -458,7 +495,7 @@ export default function App() {
             </div>
         </header>
 
-        <main className="layout">
+        <main className={`layout ${pdfViewerOpen ? "with-pdf-viewer" : ""}`}>
           <aside className="side-panel">
             <section className="panel-card">
               <h2>Document Ingestion</h2>
@@ -504,7 +541,14 @@ export default function App() {
               ) : (
                 <ul className="doc-list">
                   {documents.map((doc) => (
-                    <li key={doc.name} className="doc-item">
+                    <li
+                      key={doc.name}
+                      className={`doc-item ${doc.type === "pdf" ? "clickable-doc" : ""} ${pdfViewerDocName === doc.name ? "active-doc" : ""}`}
+                      onClick={() => {
+                        if (doc.type === "pdf") openPdfViewer(doc.name, [], null);
+                      }}
+                      title={doc.type === "pdf" ? "Click to view in PDF viewer" : doc.name}
+                    >
                       <div className="doc-name-wrap">
                         <File size={14} className="text-ink-500" />
                         <span className="doc-name" title={doc.name}>{doc.name}</span>
@@ -558,6 +602,7 @@ export default function App() {
                       text={message.content}
                       sources={message.sources}
                       onImageClick={setLightboxUrl}
+                      onCitationClick={(srcId) => handleCitationClick(srcId, message.sources)}
                       role={message.role}
                     />
                     {message.sources && message.sources.length > 0 ? (
@@ -566,7 +611,11 @@ export default function App() {
                         <ul className="source-list">
                           {message.sources.map((source) => (
                             <li key={`${message.id}_${source.id}`} className="source-item">
-                              <p className="source-title">
+                              <p
+                                className="source-title clickable-source"
+                                onClick={() => handleCitationClick(source.id, message.sources)}
+                                title="View in PDF"
+                              >
                                 {source.image_url ? (
                                   <Image size={14} className="source-icon" />
                                 ) : (
@@ -574,6 +623,9 @@ export default function App() {
                                 )}
                                 <span className="source-id">[{source.id}]</span>{" "}
                                 {formatSourceLabel(source)}
+                                {source.bounds && (
+                                  <BookOpen size={12} className="source-view-icon" />
+                                )}
                               </p>
                               {source.image_url ? (
                                 <div
@@ -643,6 +695,19 @@ export default function App() {
               </button>
             </form>
           </section>
+
+          {pdfViewerOpen && (
+            <PdfViewer
+              pdfUrl={pdfViewerUrl}
+              sources={pdfViewerSources.filter((s) => s.source === pdfViewerDocName)}
+              focusedSource={pdfFocusedSource}
+              onClose={() => {
+                setPdfViewerOpen(false);
+                setPdfFocusedSource(null);
+              }}
+              onHighlightClick={handleHighlightClick}
+            />
+          )}
         </main>
 
         <footer className="app-footer">

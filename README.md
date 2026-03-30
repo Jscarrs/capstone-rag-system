@@ -4,6 +4,7 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 
 ## Key Features
 
+- **PDF Reference Highlighting**: Embedded PDF viewer with bounding-box highlights that show exactly where each cited source appears in the original document
 - **Lazy Vision Architecture**: Figures analyzed on-demand at query time via Gemini Vision API
 - **Pydantic-Validated Figures**: Quality scoring and false-positive filtering for figure elements
 - **Zero-API Spatial Synthesis**: Ingestion uses bounding-box text extraction (no API calls, no 429 errors)
@@ -236,9 +237,11 @@ python3 ingest_single_file.py  # Single-file ingestion
 capstone-rag-system/
 ├── frontend/
 │   ├── package.json
+│   ├── vite.config.js       # Vite config with PDF.js cMaps
 │   ├── .env.example
 │   └── src/
 │       ├── App.jsx          # React UI
+│       ├── PdfViewer.jsx    # Embedded PDF viewer with highlight overlays
 │       ├── apiClient.js     # API client with base URL config
 │       └── styles.css       # Frontend styling
 ├── requirements.txt
@@ -279,6 +282,25 @@ capstone-rag-system/
 |----------|---------|-------------|
 | `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API base URL |
 
+## PDF Reference Highlighting
+
+When the RAG retrieves sources to answer a question, you can see exactly where each reference appears in the original PDF document.
+
+### How It Works
+
+1. **Bounding boxes preserved**: Adobe PDF Extract provides spatial coordinates for every text, table, and figure element. These are stored alongside the chunk content in ChromaDB.
+2. **Embedded PDF viewer**: Click any citation `[1]`, `[2]` in a chat response, or click a PDF document in the sidebar, to open the built-in PDF viewer.
+3. **Color-coded highlights**: All retrieved sources are shown as semi-transparent overlays on the PDF page. Each citation gets a unique color.
+4. **Focus on click**: All highlights appear dimly by default. Clicking a specific citation focuses and prominently highlights that source region.
+5. **Quick page navigation**: Source page buttons in the toolbar let you jump between pages that contain cited content.
+
+### Requirements
+
+- Documents must be re-ingested after upgrading to store bounding box metadata.
+- Only PDF documents support highlighting (TXT files do not have spatial coordinates).
+
+---
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -287,6 +309,8 @@ capstone-rag-system/
 | `/api/chat` | POST | Send message, get response |
 | `/api/upload` | POST | Upload and ingest a document |
 | `/api/documents` | GET | List ingested documents |
+| `/api/documents/<name>/file` | GET | Serve original document file (PDF viewer) |
+| `/api/figures/<filename>` | GET | Serve extracted figure image |
 | `/api/reset-db` | POST | Reset vector database |
 | `/api/clear` | POST | Clear conversation history |
 | `/api/health` | GET | Health check |

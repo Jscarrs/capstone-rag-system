@@ -14,12 +14,27 @@ Metadata Schema for every chunk:
   - page: page number (1-indexed)
   - figure_id: (figures only) e.g. "Figure[1]"
   - image_path: (figures only) absolute path to .png rendition
+  - bounds_x_min, bounds_y_min, bounds_x_max, bounds_y_max: PDF coordinate bounds
+    (Adobe coordinate system: origin at bottom-left, Y increases upward)
 """
 
 import os
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from shared import get_embeddings, split_text, SCRIPT_DIR, CHROMA_DIR
+
+
+def _extract_bounds_metadata(chunk_data):
+    """Extract bounding box fields from chunk data for ChromaDB storage."""
+    bounds = chunk_data.get("bounds", [])
+    if bounds and len(bounds) >= 4:
+        return {
+            "bounds_x_min": float(bounds[0]),
+            "bounds_y_min": float(bounds[1]),
+            "bounds_x_max": float(bounds[2]),
+            "bounds_y_max": float(bounds[3]),
+        }
+    return {}
 
 
 def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
@@ -60,59 +75,58 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
 
             # ── TEXT: split into sub-chunks ──
             if chunk_type == "text":
+                bounds_meta = _extract_bounds_metadata(chunk_data)
                 text_splits = split_text(content, chunk_size, chunk_overlap)
                 for i, split_dict in enumerate(text_splits):
                     split_content = split_dict["text"].strip()
                     if not split_content:
                         continue
                     lines_before = content[: split_dict["start_pos"]].count("\n")
+                    meta = {
+                        "source": file_name,
+                        "path": file_path,
+                        "chunk": i,
+                        "page": page_num,
+                        "chunk_type": "text",
+                        "start_line": lines_before + 1,
+                        **bounds_meta,
+                    }
                     documents.append(
-                        Document(
-                            page_content=split_content,
-                            metadata={
-                                "source": file_name,
-                                "path": file_path,
-                                "chunk": i,
-                                "page": page_num,
-                                "chunk_type": "text",
-                                "start_line": lines_before + 1,
-                            },
-                        )
+                        Document(page_content=split_content, metadata=meta)
                     )
 
             # ── TABLE: single chunk, Markdown ──
             elif chunk_type == "table":
+                bounds_meta = _extract_bounds_metadata(chunk_data)
+                meta = {
+                    "source": file_name,
+                    "path": file_path,
+                    "chunk": 0,
+                    "page": page_num,
+                    "chunk_type": "table",
+                    **bounds_meta,
+                }
                 documents.append(
-                    Document(
-                        page_content=content.strip(),
-                        metadata={
-                            "source": file_name,
-                            "path": file_path,
-                            "chunk": 0,
-                            "page": page_num,
-                            "chunk_type": "table",
-                        },
-                    )
+                    Document(page_content=content.strip(), metadata=meta)
                 )
 
             # ── FIGURE: single chunk, hybrid content + image_path ──
             elif chunk_type == "figure":
                 fig_id = chunk_data.get("figure_id", f"Figure_{page_num}")
                 image_path = chunk_data.get("image_path")  # from renditions
-
+                bounds_meta = _extract_bounds_metadata(chunk_data)
+                meta = {
+                    "source": file_name,
+                    "path": file_path,
+                    "chunk": 0,
+                    "page": page_num,
+                    "chunk_type": "figure",
+                    "figure_id": fig_id,
+                    "image_path": image_path,
+                    **bounds_meta,
+                }
                 documents.append(
-                    Document(
-                        page_content=content.strip(),
-                        metadata={
-                            "source": file_name,
-                            "path": file_path,
-                            "chunk": 0,
-                            "page": page_num,
-                            "chunk_type": "figure",
-                            "figure_id": fig_id,
-                            "image_path": image_path,   # for multimodal queries
-                        },
-                    )
+                    Document(page_content=content.strip(), metadata=meta)
                 )
 
         total_chars = sum(

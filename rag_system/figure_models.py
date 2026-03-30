@@ -651,6 +651,14 @@ def validate_and_describe_figure(
         desc_preview = validated.description[:80].replace("\n", " ")
         print(f"       Description: {desc_preview}...")
 
+    # Build bounds list from Pydantic model
+    bounds = []
+    if validated.bounds:
+        bounds = [
+            validated.bounds.x_min, validated.bounds.y_min,
+            validated.bounds.x_max, validated.bounds.y_max,
+        ]
+
     # Return chunk dict (compatible with existing pipeline)
     return {
         "type": "figure",
@@ -662,4 +670,5 @@ def validate_and_describe_figure(
         "figure_type": validated.figure_type.value,
         "quality_score": validated.quality_score,
         "description": validated.description,
+        "bounds": bounds,
     }
