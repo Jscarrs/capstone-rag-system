@@ -13,5 +13,6 @@ flask
 flask-cors
 flask-compress
 rank_bm25
+langchain-classic
 pdfservices-sdk>=4.0.0
 google-genai

@@ -30,7 +30,7 @@ from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
+from langchain_classic.retrievers import EnsembleRetriever
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
@@ -232,15 +232,7 @@ def process_query(user_input, session_id="default"):
     
     chat_history = get_or_create_session(session_id)
 
-    # Check if vector database is available
-    if retriever is None:
-        return {
-            "answer": "No documents have been ingested yet. Please upload a document first.",
-            "sources": [],
-            "chunks_retrieved": 0
-        }
-
-    # Retrieve relevant chunks from vector database
+    # Retrieve relevant chunks using hybrid search (vector + BM25)
     relevant_docs = retriever.invoke(user_input)
 
     if not relevant_docs:
