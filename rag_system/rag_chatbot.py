@@ -28,6 +28,9 @@ Environment Variables:
 import os
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.documents import Document
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
@@ -148,14 +151,53 @@ vectordb = Chroma(
     collection_metadata={"hnsw:space": "cosine"}
 )
 
-# Create a retriever from the vector database
-retriever = vectordb.as_retriever(
+# Create vector retriever
+vector_retriever = vectordb.as_retriever(
     search_type="similarity_score_threshold",
     search_kwargs={
         "k": RETRIEVAL_K,
         "score_threshold": SIMILARITY_THRESHOLD
     }
 )
+
+
+def _build_bm25_retriever():
+    """Build a BM25 keyword retriever from all documents in ChromaDB."""
+    try:
+        collection = vectordb._collection
+        result = collection.get(include=["documents", "metadatas"])
+        if not result["ids"]:
+            return None
+        docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(result["documents"], result["metadatas"])
+            if text and text.strip()
+        ]
+        if not docs:
+            return None
+        bm25 = BM25Retriever.from_documents(docs, k=RETRIEVAL_K)
+        print(f"[BM25] Built keyword index from {len(docs)} documents")
+        return bm25
+    except Exception as e:
+        print(f"[BM25] Failed to build index: {e}")
+        return None
+
+
+def _build_hybrid_retriever():
+    """Combine vector + BM25 into an ensemble retriever."""
+    bm25 = _build_bm25_retriever()
+    if bm25 is None:
+        print("[Hybrid] BM25 unavailable, using vector-only retrieval")
+        return vector_retriever
+    ensemble = EnsembleRetriever(
+        retrievers=[vector_retriever, bm25],
+        weights=[0.6, 0.4]  # 60% semantic, 40% keyword
+    )
+    print("[Hybrid] Ensemble retriever ready (60% semantic + 40% keyword)")
+    return ensemble
+
+
+retriever = _build_hybrid_retriever()
 
 # Store conversation history per session (simple in-memory storage)
 # For production, use session management or database
@@ -552,6 +594,10 @@ def upload_document():
             vectordb.add_documents(batch)
             print(f"  -> Added batch {i // BATCH_SIZE + 1} ({len(batch)} chunks)")
 
+        # Rebuild hybrid retriever to include new documents in BM25 index
+        global retriever
+        retriever = _build_hybrid_retriever()
+
         print(f"[UPLOAD] Successfully ingested: {filename} ({len(documents)} chunks)")
         return jsonify({
             "status": "success",
@@ -618,6 +664,10 @@ def reset_database():
 
     if errors:
         return jsonify({"error": "; ".join(errors)}), 500
+
+    # Rebuild hybrid retriever (BM25 index is now empty)
+    global retriever
+    retriever = _build_hybrid_retriever()
 
     return jsonify({
         "status": "success",
