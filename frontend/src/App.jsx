@@ -1,14 +1,14 @@
 
-import { Children, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Children, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { 
+import {
   Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle,
   CheckCircle, Info, Bot, User, FileText, Loader2, File,
-  Image, ZoomIn, BookOpen, Copy, Check
+  Image, ZoomIn, BookOpen, Copy, Check, RotateCw
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
-import PdfViewer from "./PdfViewer";
+const PdfViewer = lazy(() => import("./PdfViewer"));
 
 function useDarkMode() {
   const [isDark, setIsDark] = useState(() => {
@@ -61,12 +61,13 @@ function clearStoredChat() {
   sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
 }
 
-function createMessage(role, content, sources = []) {
+function createMessage(role, content, sources = [], extra = {}) {
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
     role,
     content,
-    sources
+    sources,
+    ...extra
   };
 }
 
@@ -322,7 +323,7 @@ export default function App() {
       console.log("[chat] response received");
     } catch (error) {
       console.error("[chat] failed:", error);
-      appendMessage("error", `Error: ${error.message}`);
+      setMessages((prev) => [...prev, createMessage("error", `Error: ${error.message}`, [], { failedQuestion: question })]);
     } finally {
       setIsSending(false);
     }
@@ -449,6 +450,23 @@ export default function App() {
       setCopiedId(messageId);
       setTimeout(() => setCopiedId(null), 2000);
     });
+  }
+
+  async function handleRetry(errorMessageId, question) {
+    if (isSending) return;
+    setMessages((prev) => prev.filter((m) => m.id !== errorMessageId));
+    setIsSending(true);
+    try {
+      const result = await apiPost("/api/chat", {
+        message: question,
+        session_id: sessionId
+      });
+      appendMessage("assistant", result.answer, result.sources || []);
+    } catch (error) {
+      setMessages((prev) => [...prev, createMessage("error", `Error: ${error.message}`, [], { failedQuestion: question })]);
+    } finally {
+      setIsSending(false);
+    }
   }
 
   const canSend = inputValue.trim().length > 0 && !isSending;
@@ -665,6 +683,16 @@ export default function App() {
                         </ul>
                       </details>
                     ) : null}
+                    {message.role === "error" && message.failedQuestion && (
+                      <button
+                        className="retry-btn"
+                        onClick={() => handleRetry(message.id, message.failedQuestion)}
+                        disabled={isSending}
+                      >
+                        <RotateCw size={14} />
+                        Retry
+                      </button>
+                    )}
                   </article>
                 </div>
               ))}
@@ -680,11 +708,11 @@ export default function App() {
                     <Bot size={20} style={{ display: 'none' }} />
                   </div>
                   <article className="message-card">
-                    <p className="message-text loading-line">
-                      <span />
-                      <span />
-                      <span />
-                    </p>
+                    <div className="skeleton-loader">
+                      <div className="skeleton-line" style={{ width: "90%" }} />
+                      <div className="skeleton-line" style={{ width: "70%" }} />
+                      <div className="skeleton-line" style={{ width: "80%" }} />
+                    </div>
                   </article>
                 </div>
               ) : null}
@@ -715,16 +743,18 @@ export default function App() {
           </section>
 
           {pdfViewerOpen && (
-            <PdfViewer
-              pdfUrl={pdfViewerUrl}
-              sources={pdfViewerSources.filter((s) => s.source === pdfViewerDocName)}
-              focusedSource={pdfFocusedSource}
-              onClose={() => {
-                setPdfViewerOpen(false);
-                setPdfFocusedSource(null);
-              }}
-              onHighlightClick={handleHighlightClick}
-            />
+            <Suspense fallback={<div className="pdf-viewer-loading"><Loader2 size={24} className="animate-spin" /> Loading PDF viewer...</div>}>
+              <PdfViewer
+                pdfUrl={pdfViewerUrl}
+                sources={pdfViewerSources.filter((s) => s.source === pdfViewerDocName)}
+                focusedSource={pdfFocusedSource}
+                onClose={() => {
+                  setPdfViewerOpen(false);
+                  setPdfFocusedSource(null);
+                }}
+                onHighlightClick={handleHighlightClick}
+              />
+            </Suspense>
           )}
         </main>
 

@@ -1053,6 +1053,64 @@ button {
   animation-delay: 240ms;
 }
 
+/* Skeleton loader */
+.skeleton-loader {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.skeleton-line {
+  height: 0.85rem;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border-default) 25%, var(--bg-doc-hover) 50%, var(--border-default) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Retry button */
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid rgba(193, 33, 38, 0.3);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--danger-500);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.retry-btn:hover:not(:disabled) {
+  background: rgba(193, 33, 38, 0.08);
+  border-color: var(--danger-500);
+}
+
+.retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* PDF viewer lazy-load fallback */
+.pdf-viewer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
