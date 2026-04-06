@@ -11,5 +11,6 @@ chromadb
 sentence-transformers
 flask
 flask-cors
+flask-compress
 pdfservices-sdk>=4.0.0
 google-genai

@@ -591,11 +591,39 @@ button {
 }
 
 .message-card {
+  position: relative;
   border-radius: var(--radius-lg);
   padding: 0.75rem 1rem;
   background-color: var(--sand-100);
   border: 1px solid rgba(0, 76, 155, 0.1);
   box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.2s ease, color 0.2s ease, background 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.message-card:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-doc-hover);
 }
 
 .message-row.user .message-card {

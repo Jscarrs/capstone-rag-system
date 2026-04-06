@@ -3,9 +3,9 @@ import { Children, useEffect, useMemo, useRef, useState, useCallback } from "rea
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { 
-  Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
+  Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle,
   CheckCircle, Info, Bot, User, FileText, Loader2, File,
-  Image, ZoomIn, BookOpen
+  Image, ZoomIn, BookOpen, Copy, Check
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
 import PdfViewer from "./PdfViewer";
@@ -442,6 +442,15 @@ export default function App() {
     setIsDragActive(false);
   }
 
+  const [copiedId, setCopiedId] = useState(null);
+
+  function handleCopyMessage(messageId, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(messageId);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
+
   const canSend = inputValue.trim().length > 0 && !isSending;
 
   return (
@@ -598,6 +607,15 @@ export default function App() {
                   </div>
                   
                   <article className="message-card">
+                    {message.role === "assistant" && (
+                      <button
+                        className="copy-btn"
+                        onClick={() => handleCopyMessage(message.id, message.content)}
+                        title={copiedId === message.id ? "Copied!" : "Copy message"}
+                      >
+                        {copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                    )}
                     <MessageContent
                       text={message.content}
                       sources={message.sources}

@@ -30,6 +30,7 @@ from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_compress import Compress
 from shared import get_llm, get_embeddings, CHROMA_DIR, DATA_DIR, FIGURES_DIR
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
@@ -45,6 +46,7 @@ app = Flask(__name__)
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 allowed_origins = [o.strip() for o in frontend_origin.split(",") if o.strip()]
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+Compress(app)
 print(f"[CORS allowed origins: {allowed_origins}]")
 
 
