@@ -12,6 +12,8 @@ Capabilities:
      and Gemini Vision descriptions stored as searchable text
   5. Zero-Null Policy → page_content is NEVER empty
   6. Multimodal Integration Helper → Base64 encoder for LLM prompts
+  7. Heading Merging → section headings (detected via Adobe's structural Path)
+     are merged into the following body text chunk on the same page
   [
     {'type': 'text',   'page': int, 'content': str, 'order': int,
      'bounds': [x_min, y_min, x_max, y_max]},
@@ -337,16 +339,21 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         else:
             text = el.get("Text", "")
             if text and text.strip():
+                is_heading = bool(re.search(r'/H\d?$|/H\d?[^a-zA-Z]', path))
+                if is_heading:
+                    print(f"     [HEADING] p.{page}: '{text.strip()[:60]}' (path={path})")
                 chunks.append({
                     "type": "text",
                     "page": page,
                     "content": text.strip(),
                     "order": idx,
                     "bounds": bounds,
+                    "is_heading": is_heading,
                 })
 
-    # Sort by reading order
+    # Sort by reading order, then merge short text chunks (headings) into body
     chunks = _sort_by_reading_order(chunks)
+    chunks = _merge_short_text_chunks(chunks)
     for i, c in enumerate(chunks):
         c["order"] = i
 
@@ -612,3 +619,42 @@ def _sort_by_reading_order(chunks: list) -> list:
         return (c.get("page", 0), -b[1], b[0])
 
     return sorted(chunks, key=key)
+
+
+def _merge_short_text_chunks(chunks: list) -> list:
+    """
+    Merge heading chunks into the next text chunk on the same page,
+    so section headings stay attached to their body text.
+
+    Uses Adobe's element Path (is_heading flag) to identify headings.
+    Only headings get merged forward. Non-heading short text stays as-is.
+    Tables and figures are never touched.
+    """
+    merged = []
+    pending_heading = None
+
+    for chunk in chunks:
+        if chunk["type"] != "text":
+            if pending_heading:
+                merged.append(pending_heading)
+                pending_heading = None
+            merged.append(chunk)
+            continue
+
+        if pending_heading:
+            if chunk["page"] == pending_heading["page"]:
+                chunk["content"] = pending_heading["content"] + "\n" + chunk["content"]
+                print(f"  [MERGE] heading '{pending_heading['content'][:50]}' -> body on p.{chunk['page']}")
+            else:
+                merged.append(pending_heading)
+            pending_heading = None
+
+        if chunk.get("is_heading"):
+            pending_heading = chunk
+        else:
+            merged.append(chunk)
+
+    if pending_heading:
+        merged.append(pending_heading)
+
+    return merged

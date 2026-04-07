@@ -542,9 +542,15 @@ export default function App() {
                   <UploadCloud className="dropzone-icon" size={32} />
                 )}
                 <span className="dropzone-title">
-                  {isUploading ? "Uploading..." : "Upload Document"}
+                  {isUploading ? "Ingesting document..." : "Upload Document"}
                 </span>
-                <span className="dropzone-hint">Supports .txt and .pdf</span>
+                {isUploading ? (
+                  <div className="upload-progress-bar">
+                    <div className="upload-progress-fill" />
+                  </div>
+                ) : (
+                  <span className="dropzone-hint">Supports .txt and .pdf</span>
+                )}
               </button>
               <input
                 ref={fileInputRef}
@@ -708,6 +714,12 @@ export default function App() {
                     <Bot size={20} style={{ display: 'none' }} />
                   </div>
                   <article className="message-card">
+                    <div className="thinking-indicator">
+                      <div className="thinking-dots">
+                        <span /><span /><span />
+                      </div>
+                      <span className="thinking-label">Thinking</span>
+                    </div>
                     <div className="skeleton-loader">
                       <div className="skeleton-line" style={{ width: "90%" }} />
                       <div className="skeleton-line" style={{ width: "70%" }} />

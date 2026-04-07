@@ -11,6 +11,11 @@ Requirements:
 - Include image_url in source data for figure chunks
 - Serve original PDF files via /api/documents/<name>/file for PDF viewer
 - Include bounding box coordinates in source data for highlight overlays
+- Agentic query rewriting: LLM rewrites user questions into 1-3 optimized
+  search queries before retrieval, improving recall for vague/multi-part
+  questions and follow-ups that use pronouns
+- Citation demotion: bibliography/reference chunks are deprioritized in
+  retrieval results so actual content sections rank higher
 
 Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL
@@ -21,11 +26,14 @@ Environment Variables:
 - RAG_SERVER_PORT: Server port (default: 8080)
 - FRONTEND_ORIGIN: Allowed frontend origin for CORS (default: http://localhost:5173)
 - DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
+- ENABLE_QUERY_REWRITE: LLM query rewriting before retrieval (default: true)
 - PDF_SERVICES_CLIENT_ID: Adobe PDF Services client ID
 - PDF_SERVICES_CLIENT_SECRET: Adobe PDF Services client secret
 """
 
 import os
+import re
+import json
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.documents import Document
@@ -37,10 +45,11 @@ from flask_compress import Compress
 from shared import get_llm, get_embeddings, CHROMA_DIR, DATA_DIR, FIGURES_DIR
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
+ENABLE_QUERY_REWRITE = os.getenv("ENABLE_QUERY_REWRITE", "true").lower() == "true"
 
-print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}]")
+print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}, ENABLE_QUERY_REWRITE: {ENABLE_QUERY_REWRITE}]")
 
 ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
@@ -223,6 +232,136 @@ def get_or_create_session(session_id):
     return sessions[session_id]
 
 
+QUERY_REWRITE_PROMPT = (
+    "You are a search query optimizer for a document retrieval system.\n"
+    "Given a user question and recent chat history, generate 1-3 keyword-based search queries.\n\n"
+    "Rules:\n"
+    "- Output short KEYWORD phrases, NOT full sentences\n"
+    "  Bad: 'What is the abstract of this paper?'\n"
+    "  Good: 'abstract', 'transformer model architecture results'\n"
+    "- Resolve pronouns using chat history (e.g. 'it' -> the specific entity)\n"
+    "- Break multi-part questions into separate keyword queries\n"
+    "- Use words that would actually appear in the document text\n"
+    "- When asking about a section (abstract, introduction, conclusion), include\n"
+    "  the section name as one query and likely content keywords as another\n"
+    "- Output ONLY a JSON array of strings, nothing else\n\n"
+    "Examples:\n"
+    "  'what is in the abstract' -> [\"abstract\", \"propose model architecture results\"]\n"
+    "  'who wrote this' -> [\"authors\", \"university department\"]\n"
+    "  'how was it trained' -> [\"training procedure\", \"optimizer learning rate epochs\"]"
+)
+
+
+def rewrite_query(user_input, chat_history):
+    """
+    Use the LLM to rewrite the user's question into 1-3 optimized search queries.
+    Falls back to the original question on any failure.
+    """
+    recent = []
+    for msg in chat_history[-6:]:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        recent.append(f"{role}: {msg.content[:200]}")
+    history_text = "\n".join(recent) if recent else "(no prior conversation)"
+
+    prompt = f"Chat history:\n{history_text}\n\nUser question: {user_input}"
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content=QUERY_REWRITE_PROMPT),
+            HumanMessage(content=prompt),
+        ])
+        raw = response.content.strip()
+
+        # Strip markdown code fences if the LLM wraps the JSON
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        queries = json.loads(raw)
+        if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+            queries = [q.strip() for q in queries if q.strip()]
+            if queries:
+                print(f"[QUERY REWRITE] {user_input!r} -> {queries}")
+                return queries
+
+        print(f"[QUERY REWRITE] Unexpected format, falling back: {raw[:200]}")
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"[QUERY REWRITE] Failed ({e}), falling back to original query")
+
+    return [user_input]
+
+
+_CITATION_RE = re.compile(
+    r'arXiv\s*(preprint)?|'
+    r'\b\d{4}\.\d{4,5}\b|'
+    r'proceedings\s+of|'
+    r'In\s+(Advances|Proceedings)|'
+    r'\bvol\.\s*\d|'
+    r'\bpp\.\s*\d|'
+    r'IEEE|ACM|ICML|NeurIPS|ICLR|EMNLP|ACL\b|'
+    r'CoRR,\s*abs/',
+    re.IGNORECASE,
+)
+
+
+def _is_citation_chunk(doc):
+    """Detect chunks that are bibliography / reference entries."""
+    text = doc.page_content
+    if len(text) > 500:
+        return False
+    return bool(_CITATION_RE.search(text))
+
+
+def retrieve_with_rewrite(user_input, chat_history):
+    """
+    Rewrite the user query into multiple search queries, run each through
+    the hybrid retriever, deduplicate, and rank by cross-query frequency.
+    Citation/reference chunks are demoted to fill only remaining slots.
+    """
+    if not ENABLE_QUERY_REWRITE:
+        return retriever.invoke(user_input)
+
+    queries = rewrite_query(user_input, chat_history)
+
+    # Collect results from all queries, tracking how often each chunk appears
+    seen = {}  # page_content hash -> (doc, count)
+    for query in queries:
+        docs = retriever.invoke(query)
+        for doc in docs:
+            key = hash(doc.page_content)
+            if key in seen:
+                seen[key] = (seen[key][0], seen[key][1] + 1)
+            else:
+                seen[key] = (doc, 1)
+
+    ranked = sorted(seen.values(), key=lambda pair: pair[1], reverse=True)
+
+    # Partition into priority tiers: figures > content > citations
+    figure_docs = []
+    content_docs = []
+    citation_docs = []
+    for doc, count in ranked:
+        chunk_type = (doc.metadata or {}).get("chunk_type")
+        if chunk_type == "figure":
+            figure_docs.append((doc, count))
+        elif _is_citation_chunk(doc):
+            citation_docs.append((doc, count))
+        else:
+            content_docs.append((doc, count))
+
+    max_results = RETRIEVAL_K * 2
+    results = [doc for doc, _c in figure_docs]
+    remaining = max_results - len(results)
+    results.extend(doc for doc, _c in content_docs[:remaining])
+    remaining = max_results - len(results)
+    if remaining > 0:
+        results.extend(doc for doc, _c in citation_docs[:remaining])
+
+    fig_count = len(figure_docs)
+    cit_count = len(citation_docs)
+    print(f"[MULTI-QUERY] {len(queries)} queries -> {sum(c for _, c in ranked)} raw hits -> {len(results)} unique chunks (cap {max_results}, {fig_count} figures prioritized, {cit_count} citations demoted)")
+    return results
+
+
 def process_query(user_input, session_id="default"):
     """
     Process a user query and return the response with sources.
@@ -232,8 +371,8 @@ def process_query(user_input, session_id="default"):
     
     chat_history = get_or_create_session(session_id)
 
-    # Retrieve relevant chunks using hybrid search (vector + BM25)
-    relevant_docs = retriever.invoke(user_input)
+    # Retrieve relevant chunks (with optional LLM query rewriting)
+    relevant_docs = retrieve_with_rewrite(user_input, chat_history)
 
     if not relevant_docs:
         return {
@@ -695,6 +834,26 @@ def chat_cli():
                     f"[{s['id']}] {s['source']} ({s['reference']}) | {s['path']}"
                 )
             print()
+
+
+@app.route("/api/debug/search", methods=["GET"])
+def debug_search():
+    """Debug endpoint: raw ChromaDB similarity search with scores."""
+    query = request.args.get("q", "abstract")
+    k = int(request.args.get("k", "10"))
+    results = vectordb.similarity_search_with_relevance_scores(query, k=k)
+    output = []
+    for doc, score in results:
+        output.append({
+            "score": round(score, 4),
+            "chunk_type": doc.metadata.get("chunk_type", "?"),
+            "page": doc.metadata.get("page", "?"),
+            "preview": doc.page_content[:150],
+        })
+    print(f"\n[DEBUG SEARCH] q={query!r} k={k}")
+    for i, item in enumerate(output):
+        print(f"  {i+1}. score={item['score']} type={item['chunk_type']} p.{item['page']}: {item['preview'][:80]}")
+    return jsonify(output)
 
 
 def run_server():

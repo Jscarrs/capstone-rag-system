@@ -268,8 +268,9 @@ capstone-rag-system/
 | `RAG_SERVER_PORT` | `8080` | Server port |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
-| `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
+| `SIMILARITY_THRESHOLD` | `0.3` | RAG retrieval threshold (0.0-1.0, lower = more results) |
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
+| `ENABLE_QUERY_REWRITE` | `true` | LLM rewrites questions into optimized search queries before retrieval |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
 | `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
 | `PDF_SERVICES_CLIENT_ID` | - | Adobe API client ID |

@@ -7,6 +7,9 @@ and stores in ChromaDB. For PDFs, delegates ALL extraction to adobe_ocr.py.
 Chunk Overlap is set to 300 to ensure figure references like "see Figure 2"
 are captured alongside descriptive text.
 
+Noise filtering: text chunks with fewer than MIN_CHUNK_ALNUM_CHARS (default 10)
+alphanumeric characters are skipped (e.g. stray symbols, footnote markers).
+
 Metadata Schema for every chunk:
   - source: filename
   - path: absolute file path
@@ -19,9 +22,18 @@ Metadata Schema for every chunk:
 """
 
 import os
+import re
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from shared import get_embeddings, split_text, SCRIPT_DIR, CHROMA_DIR
+
+MIN_ALNUM_CHARS = int(os.getenv("MIN_CHUNK_ALNUM_CHARS", "10"))
+
+
+def _is_noise_chunk(text):
+    """Return True if text is too short or has too few alphanumeric chars to be meaningful."""
+    alnum_count = len(re.findall(r'[a-zA-Z0-9]', text))
+    return alnum_count < MIN_ALNUM_CHARS
 
 
 def _extract_bounds_metadata(chunk_data):
@@ -80,6 +92,9 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                 for i, split_dict in enumerate(text_splits):
                     split_content = split_dict["text"].strip()
                     if not split_content:
+                        continue
+                    if _is_noise_chunk(split_content):
+                        print(f"  Skipping noise chunk on p.{page_num}: {split_content[:40]!r}")
                         continue
                     lines_before = content[: split_dict["start_pos"]].count("\n")
                     meta = {
