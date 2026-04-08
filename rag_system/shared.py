@@ -9,6 +9,8 @@ Environment Variables:
 - OPENAI_API_KEY: OpenAI API key
 - GOOGLE_API_KEY: Google Gemini API key
 - USE_LOCAL_EMBEDDINGS: Use local HuggingFace embeddings
+- OPENAI_MODEL_NAME: OpenAI model name for chat (default: gpt-3.5-turbo)
+- GEMINI_MODEL_NAME: Gemini model name for chat (default: gemini-3.1-flash-lite-preview)
 """
 
 import os
@@ -66,6 +68,8 @@ def get_llm():
     lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
     openai_key = os.getenv("OPENAI_API_KEY")
     google_key = os.getenv("GOOGLE_API_KEY")
+    openai_model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
+    gemini_model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite-preview")
 
     if lmstudio_url:
         from langchain_openai import ChatOpenAI
@@ -77,17 +81,17 @@ def get_llm():
         )
     elif openai_key and openai_key != "your_openai_api_key_here":
         from langchain_openai import ChatOpenAI
-        print("[Using OpenAI GPT-3.5-turbo]")
+        print(f"[Using OpenAI {openai_model_name}]")
         return ChatOpenAI(
-            model="gpt-3.5-turbo",
+            model=openai_model_name,
             temperature=0.7,
             openai_api_key=openai_key
         )
     elif google_key and google_key != "your_google_api_key_here":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        print("[Using Google Gemini 2.5 Flash]")
+        print(f"[Using Google Gemini {gemini_model_name}]")
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model=gemini_model_name,
             temperature=0.7,
             google_api_key=google_key
         )

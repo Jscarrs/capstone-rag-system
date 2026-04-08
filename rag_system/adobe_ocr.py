@@ -6,7 +6,8 @@ structural analysis. No other PDF libraries (PyMuPDF, pdfplumber, pypdf) are use
 
 Capabilities:
   1. Semantic & Structural text extraction with page/bounds metadata
-  2. High-Fidelity Table extraction → clean, valid Markdown
+  2. Vision-Based Table extraction → rendition image sent to Gemini Vision for
+     accurate Markdown reproduction (same approach as figures)
   3. Figure Renditions → physical .png files saved to assets/figures/
   4. Pydantic-Validated Figures → quality scoring, false positive filtering,
      and Gemini Vision descriptions stored as searchable text
@@ -286,6 +287,7 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         el["_bounds"] = el.get("Bounds", [])
 
     fig_counter = 0
+    table_counter = 0
     first_figure_printed = False
     
     for idx, el in enumerate(elements):
@@ -294,9 +296,15 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         bounds = el["_bounds"]
 
         if "/Table" in path:
-            chunk = _process_table(el, page, idx)
-            if chunk:
-                chunks.append(chunk)
+            is_child = "/TR" in path or "/TD" in path or "/TH" in path
+            if not is_child:
+                table_counter += 1
+                chunk = _process_table_via_vision(
+                    el, page, idx, table_counter, saved_images, elements,
+                )
+                if chunk:
+                    chunks.append(chunk)
+                    print(f"     [TABLE] p.{page}: Table[{table_counter}] ingested via vision")
 
         elif "/Figure" in path:
             fig_counter += 1
@@ -361,61 +369,114 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TABLE PROCESSING — High-Fidelity Markdown
+# TABLE PROCESSING — Vision-Based (treat tables as images)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _process_table(el: dict, page: int, order: int) -> Optional[dict]:
-    """Convert an Adobe table element to a clean Markdown table chunk."""
+def _process_table_via_vision(
+    el: dict,
+    page: int,
+    order: int,
+    table_counter: int,
+    saved_images: dict,
+    all_elements: list,
+) -> Optional[dict]:
+    """
+    Process a top-level table element by sending its rendition image to
+    Gemini Vision, which reads and describes the table contents.
+
+    Adobe Extract API saves table rendition images in the ZIP alongside
+    figure renditions. We resolve the image via the element's `filePaths`
+    key, then call Vision to produce a comprehensive text description
+    that becomes the searchable chunk content.
+    """
+    image_path = _resolve_image_path(el, saved_images)
+    table_id = f"Table[{table_counter}]"
+    print(f"     [TABLE] p.{page}: {table_id} path={el.get('Path')} filePaths={el.get('filePaths', [])} image_path={image_path}")
+
+    if not image_path or not os.path.exists(str(image_path)):
+        print(f"     [TABLE] p.{page}: {table_id} — no rendition image found, skipping")
+        return None
+
     try:
-        md = _table_to_markdown(el)
-        if md and md.strip():
-            return {
-                "type": "table",
-                "page": page,
-                "content": md,
-                "order": order,
-                "bounds": el.get("_bounds", []),
-            }
+        description = _call_table_vision(image_path, page, table_counter, el, all_elements)
     except Exception as e:
-        print(f"  Warning: table on p.{page} failed: {e}")
-    return None
+        print(f"     [TABLE] p.{page}: {table_id} — vision call failed: {e}")
+        return None
+
+    if not description or not description.strip():
+        print(f"     [TABLE] p.{page}: {table_id} — vision returned empty description")
+        return None
+
+    content = f"[{table_id} on page {page}]\n{description.strip()}"
+    return {
+        "type": "table",
+        "page": page,
+        "content": content,
+        "order": order,
+        "bounds": el.get("_bounds", []),
+        "image_path": image_path,
+    }
 
 
-def _table_to_markdown(el: dict) -> str:
-    """
-    Convert Adobe table element to valid Markdown with row/column integrity.
+def _call_table_vision(
+    image_path: str,
+    page: int,
+    table_counter: int,
+    el: dict,
+    all_elements: list,
+) -> str:
+    """Call Gemini Vision API to read and describe a table image."""
+    from google import genai
 
-    Handles tab-delimited and multi-space-delimited formats.
-    """
-    text = el.get("Text", "")
-    if not text or not text.strip():
-        return ""
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    client = genai.Client(api_key=api_key)
 
-    lines = text.strip().split("\n")
-    delimiter = "\t" if "\t" in text else None
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
 
-    rows: list = []
-    for line in lines:
-        if delimiter:
-            cells = [c.strip() for c in line.split(delimiter)]
+    ext = os.path.splitext(image_path)[1].lower().lstrip(".")
+    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "image/png")
+
+    ctx_before, ctx_after = _extract_context(el, all_elements, page, char_limit=300)
+    context_parts = []
+    if ctx_before:
+        context_parts.append(f"Text before table: {ctx_before[:200]}")
+    if ctx_after:
+        context_parts.append(f"Text after table: {ctx_after[:200]}")
+    context_str = "\n".join(context_parts) if context_parts else ""
+
+    prompt = (
+        "You are analyzing a TABLE image extracted from an academic/technical PDF.\n"
+        "Your job is to reproduce the table content as a valid Markdown table, "
+        "preserving ALL rows, columns, headers, and cell values exactly.\n\n"
+        "Rules:\n"
+        "1. Output a valid Markdown table with | delimiters and a --- header separator row\n"
+        "2. Include EVERY row and column — do not summarize or omit data\n"
+        "3. Preserve mathematical notation (use LaTeX-style where needed)\n"
+        "4. After the Markdown table, add a brief 1-2 sentence summary of what the table shows\n\n"
+    )
+    if context_str:
+        prompt += f"Context from the document:\n{context_str}\n\n"
+    prompt += "Reproduce the table now:"
+
+    image_part = genai.types.Part.from_bytes(data=img_bytes, mime_type=mime)
+    response = client.models.generate_content(
+        model=os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview"),
+        contents=[prompt, image_part],
+    )
+
+    result = response.text.strip() if hasattr(response, "text") else ""
+    # Normalize structured responses (list of parts)
+    if not isinstance(result, str):
+        if isinstance(result, list):
+            result = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in result
+            )
         else:
-            cells = [c.strip() for c in re.split(r"\s{2,}", line) if c.strip()]
-        if cells:
-            rows.append(cells)
-
-    if not rows:
-        return f"[TABLE on page {el['_page']}]\n{text}"
-
-    # Normalize column count to header
-    ncols = len(rows[0])
-    md = ["| " + " | ".join(rows[0]) + " |"]
-    md.append("|" + " --- |" * ncols)
-    for row in rows[1:]:
-        padded = (row + [""] * ncols)[:ncols]
-        md.append("| " + " | ".join(padded) + " |")
-
-    return "\n".join(md)
+            result = str(result)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

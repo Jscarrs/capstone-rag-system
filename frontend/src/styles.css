@@ -600,21 +600,20 @@ button {
 }
 
 .copy-btn {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.55rem;
   background: none;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  padding: 0.3rem;
   cursor: pointer;
   color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
   opacity: 0;
   transition: opacity 0.2s ease, color 0.2s ease, background 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
 }
 
 .message-card:hover .copy-btn {
@@ -854,6 +853,42 @@ button {
 .citation-ref {
   color: var(--tmu-blue);
   font-weight: 600;
+}
+
+.inline-figure-wrapper {
+  display: block;
+  margin: 0.35rem 0 0.1rem;
+}
+
+.inline-figure-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--sand-300);
+  border-radius: 999px;
+  background: none;
+  color: var(--tmu-blue);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.inline-figure-toggle:hover {
+  background: rgba(0, 76, 155, 0.07);
+  border-color: var(--tmu-blue);
+}
+
+[data-theme="dark"] .inline-figure-toggle {
+  color: var(--tmu-secondary-blue);
+  border-color: var(--sand-300);
+}
+
+[data-theme="dark"] .inline-figure-toggle:hover {
+  background: rgba(91, 194, 244, 0.1);
+  border-color: var(--tmu-secondary-blue);
 }
 
 .inline-figure {

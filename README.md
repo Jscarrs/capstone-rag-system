@@ -29,7 +29,7 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 ### Step 1: Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+v
 cd frontend
 npm install
 cd ..
@@ -49,6 +49,7 @@ Edit `.env` with your credentials:
 LMSTUDIO_BASE_URL=http://localhost:1234/v1
 # OPENAI_API_KEY=sk-your-key-here
 # GOOGLE_API_KEY=your-google-key-here
+GEMINI_MODEL_NAME=gemini-3.1-flash-lite-preview
 
 # Adobe PDF Services (REQUIRED for PDF processing)
 PDF_SERVICES_CLIENT_ID=your_client_id
@@ -59,7 +60,7 @@ FRONTEND_ORIGIN=http://localhost:5173
 
 # Vision (optional, for lazy figure analysis at query time)
 GOOGLE_API_KEY=your-google-key-here
-VISION_MODEL_NAME=gemini-2.5-flash
+VISION_MODEL_NAME=gemini-3.1-flash-lite-preview
 ```
 
 Edit `frontend/.env`:
@@ -272,7 +273,8 @@ capstone-rag-system/
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
 | `ENABLE_QUERY_REWRITE` | `true` | LLM rewrites questions into optimized search queries before retrieval |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
-| `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
+| `GEMINI_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for chat generation |
+| `VISION_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for Vision API calls |
 | `PDF_SERVICES_CLIENT_ID` | - | Adobe API client ID |
 | `PDF_SERVICES_CLIENT_SECRET` | - | Adobe API client secret |
 | `GOOGLE_API_KEY` | - | Gemini API key (for Vision + LLM) |

@@ -1,5 +1,5 @@
 
-import { Children, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
+import React, { Children, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -27,6 +27,17 @@ const WELCOME_TEXT = "Hello! Please insert a document and ask questions about it
 
 const STORAGE_KEY_SESSION = "rag_session_id";
 const STORAGE_KEY_MESSAGES = "rag_messages";
+const STORAGE_VERSION_KEY = "rag_storage_version";
+const STORAGE_VERSION = "3";
+
+(function migrateStorage() {
+  if (sessionStorage.getItem(STORAGE_VERSION_KEY) !== STORAGE_VERSION) {
+    console.log("[storage] version mismatch, clearing stale data");
+    sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
+    sessionStorage.removeItem(STORAGE_KEY_SESSION);
+    sessionStorage.setItem(STORAGE_VERSION_KEY, STORAGE_VERSION);
+  }
+})();
 
 function loadStoredSession() {
   const stored = sessionStorage.getItem(STORAGE_KEY_SESSION);
@@ -43,7 +54,8 @@ function loadStoredMessages() {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) return parsed;
   } catch (e) {
-    console.error("[storage] failed to parse stored messages:", e);
+    console.error("[storage] failed to parse stored messages, clearing:", e);
+    sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
   }
   return null;
 }
@@ -65,7 +77,7 @@ function createMessage(role, content, sources = [], extra = {}) {
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
     role,
-    content,
+    content: typeof content === "string" ? content : JSON.stringify(content),
     sources,
     ...extra
   };
@@ -104,6 +116,28 @@ function buildFigureMap(sources) {
 
 const CITATION_RE = /\[(\d+)\]/g;
 
+function InlineFigure({ imageUrl, figureId, onImageClick }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="inline-figure-wrapper">
+      <button
+        className="inline-figure-toggle"
+        onClick={() => setCollapsed((c) => !c)}
+        title={collapsed ? "Show figure" : "Hide figure"}
+      >
+        <Image size={11} />
+        {collapsed ? "Show figure" : "Hide figure"}
+      </button>
+      {!collapsed && (
+        <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
+          <img src={imageUrl} alt={`Figure [${figureId}]`} loading="lazy" />
+          <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 function injectCitations(children, figureMap, onImageClick, onCitationClick) {
   return Children.map(children, (child) => {
     if (typeof child !== "string") return child;
@@ -119,22 +153,14 @@ function injectCitations(children, figureMap, onImageClick, onCitationClick) {
         parts.push(child.slice(lastIndex, match.index));
       }
       const citationId = parseInt(match[1], 10);
-      const imageUrl = figureMap[citationId];
       parts.push(
-        <span key={`c${match.index}`}>
-          <span
-            className="citation-ref clickable"
-            onClick={() => onCitationClick?.(citationId)}
-            title="View in PDF"
-          >
-            {match[0]}
-          </span>
-          {imageUrl && (
-            <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
-              <img src={imageUrl} alt={`Figure [${citationId}]`} loading="lazy" />
-              <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
-            </span>
-          )}
+        <span
+          key={`c${match.index}`}
+          className="citation-ref clickable"
+          onClick={() => onCitationClick?.(citationId)}
+          title="View in PDF"
+        >
+          {match[0]}
         </span>
       );
       lastIndex = match.index + match[0].length;
@@ -147,7 +173,27 @@ function injectCitations(children, figureMap, onImageClick, onCitationClick) {
   });
 }
 
-function MessageContent({ text, sources, onImageClick, onCitationClick, role }) {
+class MessageErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error) {
+    console.error("[MessageContent] render error:", error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return <p className="message-text" style={{ color: "var(--danger-500)" }}>Failed to render this message.</p>;
+    }
+    return this.props.children;
+  }
+}
+
+function MessageContentInner({ text: rawText, sources, onImageClick, onCitationClick, role }) {
+  const text = typeof rawText === "string" ? rawText : String(rawText ?? "");
   const figureMap = useMemo(() => buildFigureMap(sources), [sources]);
 
   if (role === "user") {
@@ -166,12 +212,27 @@ function MessageContent({ text, sources, onImageClick, onCitationClick, role }) 
     return { p: wrap("p"), li: wrap("li"), td: wrap("td") };
   }, [figureMap, onImageClick, onCitationClick, sources]);
 
+  const figureEntries = useMemo(() => {
+    return Object.entries(figureMap).map(([id, url]) => ({ id: Number(id), url }));
+  }, [figureMap]);
+
   return (
     <div className="message-text markdown-body">
+      {figureEntries.map(({ id, url }) => (
+        <InlineFigure key={`fig-${id}`} imageUrl={url} figureId={id} onImageClick={onImageClick} />
+      ))}
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function MessageContent(props) {
+  return (
+    <MessageErrorBoundary>
+      <MessageContentInner {...props} />
+    </MessageErrorBoundary>
   );
 }
 
@@ -631,15 +692,6 @@ export default function App() {
                   </div>
                   
                   <article className="message-card">
-                    {message.role === "assistant" && (
-                      <button
-                        className="copy-btn"
-                        onClick={() => handleCopyMessage(message.id, message.content)}
-                        title={copiedId === message.id ? "Copied!" : "Copy message"}
-                      >
-                        {copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
-                      </button>
-                    )}
                     <MessageContent
                       text={message.content}
                       sources={message.sources}
@@ -689,6 +741,15 @@ export default function App() {
                         </ul>
                       </details>
                     ) : null}
+                    {message.role === "assistant" && (
+                      <button
+                        className="copy-btn"
+                        onClick={() => handleCopyMessage(message.id, message.content)}
+                        title={copiedId === message.id ? "Copied!" : "Copy message"}
+                      >
+                        {copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                    )}
                     {message.role === "error" && message.failedQuestion && (
                       <button
                         className="retry-btn"

@@ -21,6 +21,8 @@ Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL
 - OPENAI_API_KEY: OpenAI API key
 - GOOGLE_API_KEY: Google Gemini API key
+- GEMINI_MODEL_NAME: Gemini model for chat generation
+- VISION_MODEL_NAME: Gemini model for vision generation
 - USE_LOCAL_EMBEDDINGS: Use local HuggingFace embeddings
 - RAG_SERVER_HOST: Server host (default: 0.0.0.0)
 - RAG_SERVER_PORT: Server port (default: 8080)
@@ -43,6 +45,25 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
 from shared import get_llm, get_embeddings, CHROMA_DIR, DATA_DIR, FIGURES_DIR
+
+def _extract_text(content):
+    """Normalize LLM response content to a plain string.
+    
+    Newer Gemini models can return a list of content parts instead of a
+    simple string.  This handles both cases.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+        return "\n".join(parts)
+    return str(content)
+
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
@@ -128,7 +149,7 @@ def build_sources(docs, preview_len=200):
         reference = ", ".join(ref_parts) if ref_parts else f"chunk {meta.get('chunk', 'unknown')}"
         
         image_url = None
-        if chunk_type == "figure":
+        if chunk_type in ("figure", "table"):
             image_path = meta.get("image_path", "")
             if image_path and os.path.isfile(image_path):
                 image_url = f"/api/figures/{os.path.basename(image_path)}"
@@ -270,7 +291,7 @@ def rewrite_query(user_input, chat_history):
             SystemMessage(content=QUERY_REWRITE_PROMPT),
             HumanMessage(content=prompt),
         ])
-        raw = response.content.strip()
+        raw = _extract_text(response.content).strip()
 
         # Strip markdown code fences if the LLM wraps the JSON
         if raw.startswith("```"):
@@ -335,30 +356,30 @@ def retrieve_with_rewrite(user_input, chat_history):
 
     ranked = sorted(seen.values(), key=lambda pair: pair[1], reverse=True)
 
-    # Partition into priority tiers: figures > content > citations
-    figure_docs = []
+    # Partition into priority tiers: figures/tables > content > citations
+    priority_docs = []
     content_docs = []
     citation_docs = []
     for doc, count in ranked:
         chunk_type = (doc.metadata or {}).get("chunk_type")
-        if chunk_type == "figure":
-            figure_docs.append((doc, count))
+        if chunk_type in ("figure", "table"):
+            priority_docs.append((doc, count))
         elif _is_citation_chunk(doc):
             citation_docs.append((doc, count))
         else:
             content_docs.append((doc, count))
 
     max_results = RETRIEVAL_K * 2
-    results = [doc for doc, _c in figure_docs]
+    results = [doc for doc, _c in priority_docs]
     remaining = max_results - len(results)
     results.extend(doc for doc, _c in content_docs[:remaining])
     remaining = max_results - len(results)
     if remaining > 0:
         results.extend(doc for doc, _c in citation_docs[:remaining])
 
-    fig_count = len(figure_docs)
+    pri_count = len(priority_docs)
     cit_count = len(citation_docs)
-    print(f"[MULTI-QUERY] {len(queries)} queries -> {sum(c for _, c in ranked)} raw hits -> {len(results)} unique chunks (cap {max_results}, {fig_count} figures prioritized, {cit_count} citations demoted)")
+    print(f"[MULTI-QUERY] {len(queries)} queries -> {sum(c for _, c in ranked)} raw hits -> {len(results)} unique chunks (cap {max_results}, {pri_count} figures/tables prioritized, {cit_count} citations demoted)")
     return results
 
 
@@ -481,7 +502,7 @@ def process_query(user_input, session_id="default"):
             print(f"\nTEXT PATH: No figure images - standard LLM query")
         rag_prompt = HumanMessage(content=rag_prompt_text)
         response = llm.invoke(chat_history + [rag_prompt])
-        response_text = response.content
+        response_text = _extract_text(response.content)
 
     # Update chat history
     chat_history.append(HumanMessage(content=user_input))
@@ -576,7 +597,7 @@ def _query_gemini_vision(prompt_text, images, chat_history):
             print(f"  Warning: Failed to process image {img_data['figure_id']}: {e}")
     
     # Generate response with automatic model fallback on 429
-    vision_model = os.getenv("VISION_MODEL_NAME", "gemini-2.5-flash")
+    vision_model = os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview")
     fallback_model = "gemini-1.5-flash"
     models = [vision_model, fallback_model]
     for model_name in models:

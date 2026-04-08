@@ -442,7 +442,7 @@ def _call_gemini_vision(image_path: str, validated: ValidatedFigure) -> str:
     # Upload image and generate description
     image_part = genai.types.Part.from_bytes(data=img_bytes, mime_type=mime)
     response = client.models.generate_content(
-        model=os.getenv("VISION_MODEL_NAME", "gemini-2.5-flash"),
+        model=os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview"),
         contents=[prompt, image_part],
     )
 

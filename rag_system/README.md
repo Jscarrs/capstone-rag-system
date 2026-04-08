@@ -93,7 +93,7 @@ When a user asks about a figure:
 2. Image loaded from disk, Base64-encoded
 3. Sent to Gemini Vision with the user's **specific question**
 4. Response cached to avoid duplicate API calls
-5. Model auto-falls back from `gemini-2.5-flash` to `gemini-1.5-flash` on 429 errors
+5. Model auto-falls back from `VISION_MODEL_NAME` to `gemini-1.5-flash` on 429 errors
 
 ---
 
@@ -148,6 +148,7 @@ python3 ingest.py
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
-| `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
+| `GEMINI_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for chat generation |
+| `VISION_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for Vision API calls |
 | `chunk_size` | `1000` | Text chunk size in characters (`ingest_single_file.py`) |
 | `chunk_overlap` | `300` | Overlap between text chunks (`ingest_single_file.py`) |

@@ -16,7 +16,7 @@ Metadata Schema for every chunk:
   - chunk_type: 'text' | 'table' | 'figure'
   - page: page number (1-indexed)
   - figure_id: (figures only) e.g. "Figure[1]"
-  - image_path: (figures only) absolute path to .png rendition
+  - image_path: (figures and tables) absolute path to .png rendition
   - bounds_x_min, bounds_y_min, bounds_x_max, bounds_y_max: PDF coordinate bounds
     (Adobe coordinate system: origin at bottom-left, Y increases upward)
 """
@@ -110,9 +110,10 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                         Document(page_content=split_content, metadata=meta)
                     )
 
-            # ── TABLE: single chunk, Markdown ──
+            # ── TABLE: single chunk, Vision-described content + image_path ──
             elif chunk_type == "table":
                 bounds_meta = _extract_bounds_metadata(chunk_data)
+                image_path = chunk_data.get("image_path")
                 meta = {
                     "source": file_name,
                     "path": file_path,
@@ -121,6 +122,8 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                     "chunk_type": "table",
                     **bounds_meta,
                 }
+                if image_path:
+                    meta["image_path"] = image_path
                 documents.append(
                     Document(page_content=content.strip(), metadata=meta)
                 )
