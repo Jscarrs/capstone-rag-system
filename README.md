@@ -29,7 +29,7 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 ### Step 1: Install Dependencies
 
 ```bash
-v
+pip install -r requirements.txt
 cd frontend
 npm install
 cd ..
