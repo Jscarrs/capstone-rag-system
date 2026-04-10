@@ -359,9 +359,9 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
                     "is_heading": is_heading,
                 })
 
-    # Sort by reading order, then merge short text chunks (headings) into body
+    # Sort by reading order, then group paragraphs by section heading
     chunks = _sort_by_reading_order(chunks)
-    chunks = _merge_short_text_chunks(chunks)
+    chunks = _group_by_section(chunks)
     for i, c in enumerate(chunks):
         c["order"] = i
 
@@ -634,40 +634,92 @@ def _sort_by_reading_order(chunks: list) -> list:
     return sorted(chunks, key=key)
 
 
-def _merge_short_text_chunks(chunks: list) -> list:
+def _group_by_section(chunks: list) -> list:
     """
-    Merge heading chunks into the next text chunk on the same page,
-    so section headings stay attached to their body text.
+    Group consecutive text paragraphs under the same section heading,
+    producing larger, coherent section chunks for academic papers.
 
-    Uses Adobe's element Path (is_heading flag) to identify headings.
-    Only headings get merged forward. Non-heading short text stays as-is.
-    Tables and figures are never touched.
+    Walks all chunks in reading order, tracking the current heading.
+    Consecutive body paragraphs under the same heading are concatenated
+    into a single section chunk. Tables and figures pass through unchanged
+    with `section_heading` attached from the most recent heading.
+
+    Each output chunk gets a `section_heading` field (str or "").
     """
-    merged = []
-    pending_heading = None
+    result = []
+    current_heading = ""
+    section_buffer = None  # Accumulates text for the current section
+
+    def _flush_section():
+        """Append the buffered section chunk to results."""
+        nonlocal section_buffer
+        if section_buffer:
+            result.append(section_buffer)
+            section_buffer = None
 
     for chunk in chunks:
+        # Tables and figures: flush any pending section, pass through
         if chunk["type"] != "text":
-            if pending_heading:
-                merged.append(pending_heading)
-                pending_heading = None
-            merged.append(chunk)
+            _flush_section()
+            chunk["section_heading"] = current_heading
+            result.append(chunk)
             continue
 
-        if pending_heading:
-            if chunk["page"] == pending_heading["page"]:
-                chunk["content"] = pending_heading["content"] + "\n" + chunk["content"]
-                print(f"  [MERGE] heading '{pending_heading['content'][:50]}' -> body on p.{chunk['page']}")
-            else:
-                merged.append(pending_heading)
-            pending_heading = None
-
+        # Heading: starts a new section
         if chunk.get("is_heading"):
-            pending_heading = chunk
+            _flush_section()
+            current_heading = chunk["content"]
+            print(f"  [SECTION] p.{chunk['page']}: '{current_heading[:60]}'")
+            # Start new section buffer with heading as prefix
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": current_heading,
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
+            continue
+
+        # Body paragraph: append to current section or start standalone
+        if section_buffer and chunk["page"] == section_buffer["page"]:
+            # Same page — extend the section
+            section_buffer["content"] += "\n" + chunk["content"]
+            # Expand bounds to cover both chunks
+            if chunk.get("bounds") and section_buffer.get("bounds"):
+                sb = section_buffer["bounds"]
+                cb = chunk["bounds"]
+                if len(sb) >= 4 and len(cb) >= 4:
+                    section_buffer["bounds"] = [
+                        min(sb[0], cb[0]),
+                        min(sb[1], cb[1]),
+                        max(sb[2], cb[2]),
+                        max(sb[3], cb[3]),
+                    ]
+        elif section_buffer:
+            # Different page — flush old section, start new one
+            _flush_section()
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": chunk["content"],
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
         else:
-            merged.append(chunk)
+            # No pending section — start one
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": chunk["content"],
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
 
-    if pending_heading:
-        merged.append(pending_heading)
-
-    return merged
+    _flush_section()
+    return result

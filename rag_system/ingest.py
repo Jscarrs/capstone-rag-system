@@ -44,6 +44,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
                         chunk_type = chunk_data.get('type', 'text')
                         page_num = chunk_data.get('page', 1)
                         content = chunk_data.get('content', '')
+                        section_heading = chunk_data.get('section_heading', '')
                         
                         # CRITICAL SAFETY: Implement fallback for empty content
                         if not content or not content.strip():
@@ -75,6 +76,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
                                     "chunk": i,
                                     "page": page_num,
                                     "chunk_type": "text",
+                                    "section_heading": section_heading,
                                     "start_line": start_line if page_num else None,
                                     **bounds_meta,
                                 }
@@ -90,6 +92,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
                                 "chunk": 0,
                                 "page": page_num,
                                 "chunk_type": "table",
+                                "section_heading": section_heading,
                                 **bounds_meta,
                             }
                             documents.append(
@@ -109,6 +112,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
                                 "chunk": 0,
                                 "page": page_num,
                                 "chunk_type": "figure",
+                                "section_heading": section_heading,
                                 "figure_id": figure_id,
                                 "figure_type": figure_type,
                                 "quality_score": quality_score,

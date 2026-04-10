@@ -94,20 +94,34 @@ def get_llm():
         )
 
 
-def split_text(text, chunk_size=1000, chunk_overlap=300):
+def split_text(text, chunk_size=1000, chunk_overlap=200):
     """
-    Split text into overlapping chunks with position tracking.
+    Split text into overlapping chunks at sentence boundaries.
 
-    Overlap of 300 ensures figure references (like 'see Figure 2')
-    are captured alongside descriptive text.
+    Uses RecursiveCharacterTextSplitter to split on paragraph and
+    sentence boundaries first, falling back to word/char boundaries
+    only when necessary. This avoids cutting mid-sentence.
     """
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", ".\n", ". ", "? ", "! ", "\n", " ", ""],
+        keep_separator=True,
+    )
+
+    split_texts = splitter.split_text(text)
+
+    # Build output with position tracking for line number calculation
     chunks = []
-    start = 0
-    length = len(text)
-
-    while start < length:
-        end = start + chunk_size
-        chunks.append({"text": text[start:end], "start_pos": start})
-        start += chunk_size - chunk_overlap
+    search_start = 0
+    for t in split_texts:
+        pos = text.find(t[:50], search_start)
+        if pos == -1:
+            pos = search_start
+        chunks.append({"text": t, "start_pos": pos})
+        # Advance search past this chunk (minus overlap) for next find
+        search_start = pos + max(1, len(t) - chunk_overlap)
 
     return chunks

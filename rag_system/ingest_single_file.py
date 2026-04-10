@@ -71,6 +71,7 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
             chunk_type = chunk_data.get("type", "text")
             page_num = chunk_data.get("page", 1)
             content = chunk_data.get("content", "")
+            section_heading = chunk_data.get("section_heading", "")
 
             # ── ZERO-NULL POLICY ──
             if not content or not content.strip():
@@ -103,6 +104,7 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                         "chunk": i,
                         "page": page_num,
                         "chunk_type": "text",
+                        "section_heading": section_heading,
                         "start_line": lines_before + 1,
                         **bounds_meta,
                     }
@@ -120,6 +122,7 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                     "chunk": 0,
                     "page": page_num,
                     "chunk_type": "table",
+                    "section_heading": section_heading,
                     **bounds_meta,
                 }
                 if image_path:
@@ -139,6 +142,7 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
                     "chunk": 0,
                     "page": page_num,
                     "chunk_type": "figure",
+                    "section_heading": section_heading,
                     "figure_id": fig_id,
                     "image_path": image_path,
                     **bounds_meta,

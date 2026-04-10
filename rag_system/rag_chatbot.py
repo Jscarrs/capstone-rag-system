@@ -71,6 +71,7 @@ DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
 ENABLE_QUERY_REWRITE = os.getenv("ENABLE_QUERY_REWRITE", "true").lower() == "true"
+ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 
 print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}, ENABLE_QUERY_REWRITE: {ENABLE_QUERY_REWRITE}]")
 
@@ -183,11 +184,14 @@ vectordb = Chroma(
     collection_metadata={"hnsw:space": "cosine"}
 )
 
+# When re-ranking is enabled, fetch more candidates for the cross-encoder to score
+_FETCH_K = RETRIEVAL_K * 3 if ENABLE_RERANKING else RETRIEVAL_K
+
 # Create vector retriever
 vector_retriever = vectordb.as_retriever(
     search_type="similarity_score_threshold",
     search_kwargs={
-        "k": RETRIEVAL_K,
+        "k": _FETCH_K,
         "score_threshold": SIMILARITY_THRESHOLD
     }
 )
@@ -207,7 +211,7 @@ def _build_bm25_retriever():
         ]
         if not docs:
             return None
-        bm25 = BM25Retriever.from_documents(docs, k=RETRIEVAL_K)
+        bm25 = BM25Retriever.from_documents(docs, k=_FETCH_K)
         print(f"[BM25] Built keyword index from {len(docs)} documents")
         return bm25
     except Exception as e:
@@ -230,6 +234,16 @@ def _build_hybrid_retriever():
 
 
 retriever = _build_hybrid_retriever()
+
+# Cross-encoder re-ranker (loaded once at startup)
+_cross_encoder = None
+if ENABLE_RERANKING:
+    try:
+        from sentence_transformers import CrossEncoder
+        _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        print("[RERANKER] Cross-encoder re-ranking enabled (ms-marco-MiniLM-L-6-v2)")
+    except Exception as e:
+        print(f"[RERANKER] Failed to load cross-encoder: {e}")
 
 # Store conversation history per session (simple in-memory storage)
 # For production, use session management or database
@@ -357,6 +371,19 @@ def retrieve_with_rewrite(user_input, chat_history):
                 seen[key] = (doc, 1)
 
     ranked = sorted(seen.values(), key=lambda pair: pair[1], reverse=True)
+
+    # Cross-encoder re-ranking: score each candidate against the original query
+    if _cross_encoder and ranked:
+        pairs = [[user_input, doc.page_content] for doc, _count in ranked]
+        scores = _cross_encoder.predict(pairs)
+        # Re-sort by cross-encoder score (higher = more relevant)
+        ranked = [
+            (doc, count)
+            for (doc, count), _score in sorted(
+                zip(ranked, scores), key=lambda x: x[1], reverse=True
+            )
+        ]
+        print(f"[RERANKER] Re-ranked {len(ranked)} candidates (top score: {max(scores):.3f})")
 
     # Partition into priority tiers: figures/tables > content > citations
     priority_docs = []
