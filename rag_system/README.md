@@ -14,13 +14,7 @@ A Retrieval-Augmented Generation system that lets you chat with your documents, 
 |              +-- Figures (-> .png + Pydantic filter)   |
 |                     |                                  |
 |                     v                                  |
-|  TEXT COLLECTION:                                      |
-|    Text/Table/Figure chunks                            |
-|    --> HuggingFace Embeddings --> ChromaDB              |
-|                                                        |
-|  VISUAL COLLECTION:                                    |
-|    Table/Figure rendition images                       |
-|    + 6-page PDF slices (original PDF)                  |
+|  Text/Table/Figure chunks                              |
 |    --> HuggingFace Embeddings --> ChromaDB              |
 +-------------------------------------------------------+
 
@@ -29,10 +23,8 @@ A Retrieval-Augmented Generation system that lets you chat with your documents, 
 +-------------------------------------------------------+
 |  Question --> Text embedding (HuggingFace)             |
 |     |                                                  |
-|     +--> Search TEXT collection (hybrid: vector+BM25)  |
-|     +--> Search VISUAL collection (image/PDF vectors)  |
-|     |                                                  |
-|     +--> Merge + dedupe + rank results                 |
+|     +--> Search collection (hybrid: vector+BM25)       |
+|     +--> Rank + dedupe results                         |
 |                                                        |
 |  If figure chunks with images retrieved:               |
 |    -> Load .png -> Base64 -> Gemini Vision API         |

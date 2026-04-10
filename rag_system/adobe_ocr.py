@@ -419,7 +419,7 @@ def _process_table_from_elements(
     content = "\n".join(parts)
 
     if not content.strip() or (not cell_texts and not ctx_before):
-        content = f"Table on page {page} (visual content — see image embedding)"
+        content = f"Table on page {page} (visual content — see attached image)"
 
     return {
         "type": "table",
