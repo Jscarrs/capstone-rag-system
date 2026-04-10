@@ -4,12 +4,12 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 
 ## Key Features
 
+- **Hybrid Retrieval**: Ensemble of semantic (HuggingFace) + BM25 keyword search for superior document retrieval
 - **PDF Reference Highlighting**: Embedded PDF viewer with bounding-box highlights that show exactly where each cited source appears in the original document
 - **Lazy Vision Architecture**: Figures analyzed on-demand at query time via Gemini Vision API
 - **Pydantic-Validated Figures**: Quality scoring and false-positive filtering for figure elements
 - **Zero-API Spatial Synthesis**: Ingestion uses bounding-box text extraction (no API calls, no 429 errors)
 - **Strict Adobe PDF Extract API**: Sole engine for PDF OCR and structural analysis
-- **High-Fidelity Tables**: Converted to clean Markdown with row/column integrity
 - **Separated Frontend/Backend**: React + Vite frontend with API-only Flask backend
 - **Multi-provider LLM**: Supports LM Studio (local/free), OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free, no API keys)

@@ -16,6 +16,8 @@ Requirements:
   questions and follow-ups that use pronouns
 - Citation demotion: bibliography/reference chunks are deprioritized in
   retrieval results so actual content sections rank higher
+- Visual retrieval: on-demand Gemini Vision analysis for figure/table
+  images, with hybrid text+BM25 retrieval for document search
 
 Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL

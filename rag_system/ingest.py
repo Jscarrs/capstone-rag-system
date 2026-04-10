@@ -38,7 +38,7 @@ def ingest_all_documents(data_dir=DATA_DIR):
                 try:
                     # Extract structured chunks from PDF
                     structured_chunks = extract_text_from_pdf(file_path)
-                    
+
                     # Process each structured chunk
                     for chunk_data in structured_chunks:
                         chunk_type = chunk_data.get('type', 'text')

@@ -6,11 +6,11 @@ structural analysis. No other PDF libraries (PyMuPDF, pdfplumber, pypdf) are use
 
 Capabilities:
   1. Semantic & Structural text extraction with page/bounds metadata
-  2. Vision-Based Table extraction → rendition image sent to Gemini Vision for
-     accurate Markdown reproduction (same approach as figures)
+  2. Table extraction from Adobe element text (cell content from TD/TH elements).
+     Rendition images are saved for on-demand Gemini Vision analysis at query time.
   3. Figure Renditions → physical .png files saved to assets/figures/
   4. Pydantic-Validated Figures → quality scoring, false positive filtering,
-     and Gemini Vision descriptions stored as searchable text
+     and spatial text descriptions stored as searchable text
   5. Zero-Null Policy → page_content is NEVER empty
   6. Multimodal Integration Helper → Base64 encoder for LLM prompts
   7. Heading Merging → section headings (detected via Adobe's structural Path)
@@ -18,8 +18,8 @@ Capabilities:
   [
     {'type': 'text',   'page': int, 'content': str, 'order': int,
      'bounds': [x_min, y_min, x_max, y_max]},
-    {'type': 'table',  'page': int, 'content': str (markdown), 'order': int,
-     'bounds': [x_min, y_min, x_max, y_max]},
+    {'type': 'table',  'page': int, 'content': str, 'order': int,
+     'bounds': [x_min, y_min, x_max, y_max], 'image_path': str},
     {'type': 'figure', 'page': int, 'content': str (hybrid),   'order': int,
      'figure_id': str, 'image_path': str|None},
   ]
@@ -299,12 +299,12 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
             is_child = "/TR" in path or "/TD" in path or "/TH" in path
             if not is_child:
                 table_counter += 1
-                chunk = _process_table_via_vision(
+                chunk = _process_table_from_elements(
                     el, page, idx, table_counter, saved_images, elements,
                 )
                 if chunk:
                     chunks.append(chunk)
-                    print(f"     [TABLE] p.{page}: Table[{table_counter}] ingested via vision")
+                    print(f"     [TABLE] p.{page}: Table[{table_counter}] ingested from element text")
 
         elif "/Figure" in path:
             fig_counter += 1
@@ -373,7 +373,7 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _process_table_via_vision(
+def _process_table_from_elements(
     el: dict,
     page: int,
     order: int,
@@ -382,101 +382,53 @@ def _process_table_via_vision(
     all_elements: list,
 ) -> Optional[dict]:
     """
-    Process a top-level table element by sending its rendition image to
-    Gemini Vision, which reads and describes the table contents.
+    Process a top-level table element by extracting text from its child
+    elements (TD/TH cells) in the Adobe JSON. No Vision API call needed —
+    on-demand Gemini Vision analysis at query time handles visual understanding.
 
-    Adobe Extract API saves table rendition images in the ZIP alongside
-    figure renditions. We resolve the image via the element's `filePaths`
-    key, then call Vision to produce a comprehensive text description
-    that becomes the searchable chunk content.
+    The rendition image (if available) is still saved and referenced in
+    metadata for frontend display.
     """
     image_path = _resolve_image_path(el, saved_images)
     table_id = f"Table[{table_counter}]"
-    print(f"     [TABLE] p.{page}: {table_id} path={el.get('Path')} filePaths={el.get('filePaths', [])} image_path={image_path}")
+    table_path = el.get("Path", "")
 
-    if not image_path or not os.path.exists(str(image_path)):
-        print(f"     [TABLE] p.{page}: {table_id} — no rendition image found, skipping")
-        return None
+    # Collect text from child TD/TH elements belonging to this table
+    cell_texts = []
+    for child in all_elements:
+        child_path = child.get("Path", "")
+        if not child_path.startswith(table_path):
+            continue
+        if "/TD" not in child_path and "/TH" not in child_path:
+            continue
+        text = (child.get("Text", "") or "").strip()
+        if text:
+            cell_texts.append(text)
 
-    try:
-        description = _call_table_vision(image_path, page, table_counter, el, all_elements)
-    except Exception as e:
-        print(f"     [TABLE] p.{page}: {table_id} — vision call failed: {e}")
-        return None
+    # Build text content from cells + surrounding context
+    ctx_before, ctx_after = _extract_context(el, all_elements, page, char_limit=300)
 
-    if not description or not description.strip():
-        print(f"     [TABLE] p.{page}: {table_id} — vision returned empty description")
-        return None
+    parts = [f"[{table_id} on page {page}]"]
+    if cell_texts:
+        parts.append(" | ".join(cell_texts))
+    if ctx_before:
+        parts.append(f"Context: {ctx_before[:200]}")
+    if ctx_after:
+        parts.append(ctx_after[:200])
 
-    content = f"[{table_id} on page {page}]\n{description.strip()}"
+    content = "\n".join(parts)
+
+    if not content.strip() or (not cell_texts and not ctx_before):
+        content = f"Table on page {page} (visual content — see image embedding)"
+
     return {
         "type": "table",
         "page": page,
         "content": content,
         "order": order,
         "bounds": el.get("_bounds", []),
-        "image_path": image_path,
+        "image_path": image_path if image_path else "",
     }
-
-
-def _call_table_vision(
-    image_path: str,
-    page: int,
-    table_counter: int,
-    el: dict,
-    all_elements: list,
-) -> str:
-    """Call Gemini Vision API to read and describe a table image."""
-    from google import genai
-
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    client = genai.Client(api_key=api_key)
-
-    with open(image_path, "rb") as f:
-        img_bytes = f.read()
-
-    ext = os.path.splitext(image_path)[1].lower().lstrip(".")
-    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "image/png")
-
-    ctx_before, ctx_after = _extract_context(el, all_elements, page, char_limit=300)
-    context_parts = []
-    if ctx_before:
-        context_parts.append(f"Text before table: {ctx_before[:200]}")
-    if ctx_after:
-        context_parts.append(f"Text after table: {ctx_after[:200]}")
-    context_str = "\n".join(context_parts) if context_parts else ""
-
-    prompt = (
-        "You are analyzing a TABLE image extracted from an academic/technical PDF.\n"
-        "Your job is to reproduce the table content as a valid Markdown table, "
-        "preserving ALL rows, columns, headers, and cell values exactly.\n\n"
-        "Rules:\n"
-        "1. Output a valid Markdown table with | delimiters and a --- header separator row\n"
-        "2. Include EVERY row and column — do not summarize or omit data\n"
-        "3. Preserve mathematical notation (use LaTeX-style where needed)\n"
-        "4. After the Markdown table, add a brief 1-2 sentence summary of what the table shows\n\n"
-    )
-    if context_str:
-        prompt += f"Context from the document:\n{context_str}\n\n"
-    prompt += "Reproduce the table now:"
-
-    image_part = genai.types.Part.from_bytes(data=img_bytes, mime_type=mime)
-    response = client.models.generate_content(
-        model=os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview"),
-        contents=[prompt, image_part],
-    )
-
-    result = response.text.strip() if hasattr(response, "text") else ""
-    # Normalize structured responses (list of parts)
-    if not isinstance(result, str):
-        if isinstance(result, list):
-            result = " ".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in result
-            )
-        else:
-            result = str(result)
-    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

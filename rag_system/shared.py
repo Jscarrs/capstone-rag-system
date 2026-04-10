@@ -29,12 +29,11 @@ FIGURES_DIR = os.path.join(SCRIPT_DIR, "assets", "figures")
 def get_embeddings():
     """
     Initialize embeddings based on available configuration.
-    Priority: HuggingFace (local) > OpenAI > Google Gemini
+    Priority: HuggingFace (local) > OpenAI
     """
     use_local = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
     lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
     openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
 
     if use_local or lmstudio_url:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -46,17 +45,10 @@ def get_embeddings():
         from langchain_openai import OpenAIEmbeddings
         print("[Using OpenAI Embeddings]")
         return OpenAIEmbeddings(openai_api_key=openai_key)
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        print("[Using Google Gemini Embeddings]")
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_key,
-        )
     else:
         raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, "
-            "OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
+            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true "
+            "or OPENAI_API_KEY in your .env file."
         )
 
 
