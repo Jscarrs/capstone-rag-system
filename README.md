@@ -308,7 +308,7 @@ capstone-rag-system/
 
 - **[HuggingFace Transformers](https://github.com/huggingface/transformers)** — Local embeddings via `sentence-transformers/all-MiniLM-L6-v2`
 
-### LLM Providers
+### LLM Provider
 
 - **[LM Studio](https://lmstudio.ai/)** — Local LLM inference server
 - **[OpenAI](https://openai.com/)** — GPT models API
