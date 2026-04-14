@@ -1,6 +1,6 @@
 # RAG System — Multimodal Document Question Answering
 
-A Retrieval-Augmented Generation system that lets you chat with your documents, including **visual understanding of figures and tables** via on-demand Gemini Vision analysis.
+A Retrieval-Augmented Generation system that lets you chat with your documents, including **visual understanding of figures and tables** via hybrid retrieval and on-demand Gemini Vision analysis.
 
 ## Architecture
 
@@ -10,26 +10,21 @@ A Retrieval-Augmented Generation system that lets you chat with your documents, 
 +-------------------------------------------------------+
 |  PDF --> Adobe PDF Extract API                         |
 |              |-- Text chunks (structured paragraphs)   |
-|              |-- Tables (-> Markdown with integrity)   |
+|              |-- Tables (cell text + rendition .png)   |
 |              +-- Figures (-> .png + Pydantic filter)   |
 |                     |                                  |
 |                     v                                  |
-|              Pydantic Validation                       |
-|              (quality scoring, false-positive filter)  |
-|                     |                                  |
-|                     v                                  |
-|              Spatial Synthesis (zero API calls)        |
-|              Scans text inside bounding box,           |
-|              sorts top-to-bottom by Y-coordinate       |
-|                                                        |
-|  All chunks --> HuggingFace Embeddings --> ChromaDB    |
-|                 (local, free)              (local)     |
+|  Text/Table/Figure chunks                              |
+|    --> HuggingFace Embeddings --> ChromaDB              |
 +-------------------------------------------------------+
 
 +-------------------------------------------------------+
 |                    QUERY PHASE                          |
 +-------------------------------------------------------+
-|  Question --> Similarity Search --> Top K Chunks        |
+|  Question --> Text embedding (HuggingFace)             |
+|     |                                                  |
+|     +--> Search collection (hybrid: vector+BM25)       |
+|     +--> Rank + dedupe results                         |
 |                                                        |
 |  If figure chunks with images retrieved:               |
 |    -> Load .png -> Base64 -> Gemini Vision API         |
@@ -93,7 +88,7 @@ When a user asks about a figure:
 2. Image loaded from disk, Base64-encoded
 3. Sent to Gemini Vision with the user's **specific question**
 4. Response cached to avoid duplicate API calls
-5. Model auto-falls back from `gemini-2.5-flash` to `gemini-1.5-flash` on 429 errors
+5. Model auto-falls back from `VISION_MODEL_NAME` to `gemini-1.5-flash` on 429 errors
 
 ---
 
@@ -101,12 +96,13 @@ When a user asks about a figure:
 
 | File | Purpose |
 |------|---------|
-| `rag_chatbot.py` | RAG chatbot server with lazy Vision at query time |
+| `rag_chatbot.py` | RAG chatbot server with retrieval + lazy Vision |
 | `adobe_ocr.py` | Adobe PDF Services integration + rendition extraction |
 | `figure_models.py` | Pydantic validation, quality scoring, spatial synthesis |
 | `ingest.py` | Multi-file ingestion to ChromaDB |
 | `ingest_single_file.py` | Single-file ingestion to ChromaDB |
 | `pdf_processor.py` | PDF routing (delegates to Adobe) |
+| `shared.py` | Provider config, embedding selection, shared constants |
 | `data/` | Place your `.txt` / `.pdf` documents here |
 | `assets/figures/` | Extracted figure images (auto-created) |
 | `chroma_db/` | Vector database (auto-created) |
@@ -133,7 +129,7 @@ Every chunk stored in ChromaDB includes:
 
 ## Re-ingestion
 
-After pipeline changes, delete and rebuild:
+After pipeline changes, delete both databases and rebuild:
 
 ```bash
 rm -rf chroma_db
@@ -144,10 +140,11 @@ python3 ingest.py
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIMILARITY_THRESHOLD` | `0.4` | Minimum similarity score for retrieval |
+| `SIMILARITY_THRESHOLD` | `0.3` | Minimum similarity score for retrieval |
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
-| `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
+| `GEMINI_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for chat generation |
+| `VISION_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for Vision API calls |
 | `chunk_size` | `1000` | Text chunk size in characters (`ingest_single_file.py`) |
 | `chunk_overlap` | `300` | Overlap between text chunks (`ingest_single_file.py`) |

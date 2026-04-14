@@ -442,7 +442,7 @@ def _call_gemini_vision(image_path: str, validated: ValidatedFigure) -> str:
     # Upload image and generate description
     image_part = genai.types.Part.from_bytes(data=img_bytes, mime_type=mime)
     response = client.models.generate_content(
-        model=os.getenv("VISION_MODEL_NAME", "gemini-2.5-flash"),
+        model=os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview"),
         contents=[prompt, image_part],
     )
 
@@ -651,6 +651,14 @@ def validate_and_describe_figure(
         desc_preview = validated.description[:80].replace("\n", " ")
         print(f"       Description: {desc_preview}...")
 
+    # Build bounds list from Pydantic model
+    bounds = []
+    if validated.bounds:
+        bounds = [
+            validated.bounds.x_min, validated.bounds.y_min,
+            validated.bounds.x_max, validated.bounds.y_max,
+        ]
+
     # Return chunk dict (compatible with existing pipeline)
     return {
         "type": "figure",
@@ -662,4 +670,5 @@ def validate_and_describe_figure(
         "figure_type": validated.figure_type.value,
         "quality_score": validated.quality_score,
         "description": validated.description,
+        "bounds": bounds,
     }

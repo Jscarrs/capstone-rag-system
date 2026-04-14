@@ -6,15 +6,20 @@ structural analysis. No other PDF libraries (PyMuPDF, pdfplumber, pypdf) are use
 
 Capabilities:
   1. Semantic & Structural text extraction with page/bounds metadata
-  2. High-Fidelity Table extraction → clean, valid Markdown
+  2. Table extraction from Adobe element text (cell content from TD/TH elements).
+     Rendition images are saved for on-demand Gemini Vision analysis at query time.
   3. Figure Renditions → physical .png files saved to assets/figures/
   4. Pydantic-Validated Figures → quality scoring, false positive filtering,
-     and Gemini Vision descriptions stored as searchable text
+     and spatial text descriptions stored as searchable text
   5. Zero-Null Policy → page_content is NEVER empty
   6. Multimodal Integration Helper → Base64 encoder for LLM prompts
+  7. Heading Merging → section headings (detected via Adobe's structural Path)
+     are merged into the following body text chunk on the same page
   [
-    {'type': 'text',   'page': int, 'content': str, 'order': int},
-    {'type': 'table',  'page': int, 'content': str (markdown), 'order': int},
+    {'type': 'text',   'page': int, 'content': str, 'order': int,
+     'bounds': [x_min, y_min, x_max, y_max]},
+    {'type': 'table',  'page': int, 'content': str, 'order': int,
+     'bounds': [x_min, y_min, x_max, y_max], 'image_path': str},
     {'type': 'figure', 'page': int, 'content': str (hybrid),   'order': int,
      'figure_id': str, 'image_path': str|None},
   ]
@@ -282,6 +287,7 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         el["_bounds"] = el.get("Bounds", [])
 
     fig_counter = 0
+    table_counter = 0
     first_figure_printed = False
     
     for idx, el in enumerate(elements):
@@ -290,9 +296,15 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         bounds = el["_bounds"]
 
         if "/Table" in path:
-            chunk = _process_table(el, page, idx)
-            if chunk:
-                chunks.append(chunk)
+            is_child = "/TR" in path or "/TD" in path or "/TH" in path
+            if not is_child:
+                table_counter += 1
+                chunk = _process_table_from_elements(
+                    el, page, idx, table_counter, saved_images, elements,
+                )
+                if chunk:
+                    chunks.append(chunk)
+                    print(f"     [TABLE] p.{page}: Table[{table_counter}] ingested from element text")
 
         elif "/Figure" in path:
             fig_counter += 1
@@ -335,79 +347,88 @@ def _parse_extract_json(content_json: dict, saved_images: dict) -> list:
         else:
             text = el.get("Text", "")
             if text and text.strip():
+                is_heading = bool(re.search(r'/H\d?$|/H\d?[^a-zA-Z]', path))
+                if is_heading:
+                    print(f"     [HEADING] p.{page}: '{text.strip()[:60]}' (path={path})")
                 chunks.append({
                     "type": "text",
                     "page": page,
                     "content": text.strip(),
                     "order": idx,
                     "bounds": bounds,
+                    "is_heading": is_heading,
                 })
 
-    # Sort by reading order
+    # Sort by reading order, then group paragraphs by section heading
     chunks = _sort_by_reading_order(chunks)
+    chunks = _group_by_section(chunks)
     for i, c in enumerate(chunks):
         c["order"] = i
-        c.pop("bounds", None)
 
     return chunks
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TABLE PROCESSING — High-Fidelity Markdown
+# TABLE PROCESSING — Vision-Based (treat tables as images)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _process_table(el: dict, page: int, order: int) -> Optional[dict]:
-    """Convert an Adobe table element to a clean Markdown table chunk."""
-    try:
-        md = _table_to_markdown(el)
-        if md and md.strip():
-            return {
-                "type": "table",
-                "page": page,
-                "content": md,
-                "order": order,
-                "bounds": el.get("_bounds", []),
-            }
-    except Exception as e:
-        print(f"  Warning: table on p.{page} failed: {e}")
-    return None
-
-
-def _table_to_markdown(el: dict) -> str:
+def _process_table_from_elements(
+    el: dict,
+    page: int,
+    order: int,
+    table_counter: int,
+    saved_images: dict,
+    all_elements: list,
+) -> Optional[dict]:
     """
-    Convert Adobe table element to valid Markdown with row/column integrity.
+    Process a top-level table element by extracting text from its child
+    elements (TD/TH cells) in the Adobe JSON. No Vision API call needed —
+    on-demand Gemini Vision analysis at query time handles visual understanding.
 
-    Handles tab-delimited and multi-space-delimited formats.
+    The rendition image (if available) is still saved and referenced in
+    metadata for frontend display.
     """
-    text = el.get("Text", "")
-    if not text or not text.strip():
-        return ""
+    image_path = _resolve_image_path(el, saved_images)
+    table_id = f"Table[{table_counter}]"
+    table_path = el.get("Path", "")
 
-    lines = text.strip().split("\n")
-    delimiter = "\t" if "\t" in text else None
+    # Collect text from child TD/TH elements belonging to this table
+    cell_texts = []
+    for child in all_elements:
+        child_path = child.get("Path", "")
+        if not child_path.startswith(table_path):
+            continue
+        if "/TD" not in child_path and "/TH" not in child_path:
+            continue
+        text = (child.get("Text", "") or "").strip()
+        if text:
+            cell_texts.append(text)
 
-    rows: list = []
-    for line in lines:
-        if delimiter:
-            cells = [c.strip() for c in line.split(delimiter)]
-        else:
-            cells = [c.strip() for c in re.split(r"\s{2,}", line) if c.strip()]
-        if cells:
-            rows.append(cells)
+    # Build text content from cells + surrounding context
+    ctx_before, ctx_after = _extract_context(el, all_elements, page, char_limit=300)
 
-    if not rows:
-        return f"[TABLE on page {el['_page']}]\n{text}"
+    parts = [f"[{table_id} on page {page}]"]
+    if cell_texts:
+        parts.append(" | ".join(cell_texts))
+    if ctx_before:
+        parts.append(f"Context: {ctx_before[:200]}")
+    if ctx_after:
+        parts.append(ctx_after[:200])
 
-    # Normalize column count to header
-    ncols = len(rows[0])
-    md = ["| " + " | ".join(rows[0]) + " |"]
-    md.append("|" + " --- |" * ncols)
-    for row in rows[1:]:
-        padded = (row + [""] * ncols)[:ncols]
-        md.append("| " + " | ".join(padded) + " |")
+    content = "\n".join(parts)
 
-    return "\n".join(md)
+    if not content.strip() or (not cell_texts and not ctx_before):
+        content = f"Table on page {page} (visual content — see attached image)"
+
+    return {
+        "type": "table",
+        "page": page,
+        "content": content,
+        "order": order,
+        "bounds": el.get("_bounds", []),
+        "image_path": image_path if image_path else "",
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -611,3 +632,94 @@ def _sort_by_reading_order(chunks: list) -> list:
         return (c.get("page", 0), -b[1], b[0])
 
     return sorted(chunks, key=key)
+
+
+def _group_by_section(chunks: list) -> list:
+    """
+    Group consecutive text paragraphs under the same section heading,
+    producing larger, coherent section chunks for academic papers.
+
+    Walks all chunks in reading order, tracking the current heading.
+    Consecutive body paragraphs under the same heading are concatenated
+    into a single section chunk. Tables and figures pass through unchanged
+    with `section_heading` attached from the most recent heading.
+
+    Each output chunk gets a `section_heading` field (str or "").
+    """
+    result = []
+    current_heading = ""
+    section_buffer = None  # Accumulates text for the current section
+
+    def _flush_section():
+        """Append the buffered section chunk to results."""
+        nonlocal section_buffer
+        if section_buffer:
+            result.append(section_buffer)
+            section_buffer = None
+
+    for chunk in chunks:
+        # Tables and figures: flush any pending section, pass through
+        if chunk["type"] != "text":
+            _flush_section()
+            chunk["section_heading"] = current_heading
+            result.append(chunk)
+            continue
+
+        # Heading: starts a new section
+        if chunk.get("is_heading"):
+            _flush_section()
+            current_heading = chunk["content"]
+            print(f"  [SECTION] p.{chunk['page']}: '{current_heading[:60]}'")
+            # Start new section buffer with heading as prefix
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": current_heading,
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
+            continue
+
+        # Body paragraph: append to current section or start standalone
+        if section_buffer and chunk["page"] == section_buffer["page"]:
+            # Same page — extend the section
+            section_buffer["content"] += "\n" + chunk["content"]
+            # Expand bounds to cover both chunks
+            if chunk.get("bounds") and section_buffer.get("bounds"):
+                sb = section_buffer["bounds"]
+                cb = chunk["bounds"]
+                if len(sb) >= 4 and len(cb) >= 4:
+                    section_buffer["bounds"] = [
+                        min(sb[0], cb[0]),
+                        min(sb[1], cb[1]),
+                        max(sb[2], cb[2]),
+                        max(sb[3], cb[3]),
+                    ]
+        elif section_buffer:
+            # Different page — flush old section, start new one
+            _flush_section()
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": chunk["content"],
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
+        else:
+            # No pending section — start one
+            section_buffer = {
+                "type": "text",
+                "page": chunk["page"],
+                "content": chunk["content"],
+                "order": chunk["order"],
+                "bounds": chunk["bounds"],
+                "is_heading": False,
+                "section_heading": current_heading,
+            }
+
+    _flush_section()
+    return result

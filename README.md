@@ -4,11 +4,12 @@ A chatbot built with LangChain that supports conversation memory and **Multimoda
 
 ## Key Features
 
+- **Hybrid Retrieval**: Ensemble of semantic (HuggingFace) + BM25 keyword search for superior document retrieval
+- **PDF Reference Highlighting**: Embedded PDF viewer with bounding-box highlights that show exactly where each cited source appears in the original document
 - **Lazy Vision Architecture**: Figures analyzed on-demand at query time via Gemini Vision API
 - **Pydantic-Validated Figures**: Quality scoring and false-positive filtering for figure elements
 - **Zero-API Spatial Synthesis**: Ingestion uses bounding-box text extraction (no API calls, no 429 errors)
 - **Strict Adobe PDF Extract API**: Sole engine for PDF OCR and structural analysis
-- **High-Fidelity Tables**: Converted to clean Markdown with row/column integrity
 - **Separated Frontend/Backend**: React + Vite frontend with API-only Flask backend
 - **Multi-provider LLM**: Supports LM Studio (local/free), OpenAI, and Google Gemini
 - **Local Embeddings**: Uses HuggingFace sentence-transformers (free, no API keys)
@@ -48,6 +49,7 @@ Edit `.env` with your credentials:
 LMSTUDIO_BASE_URL=http://localhost:1234/v1
 # OPENAI_API_KEY=sk-your-key-here
 # GOOGLE_API_KEY=your-google-key-here
+GEMINI_MODEL_NAME=gemini-3.1-flash-lite-preview
 
 # Adobe PDF Services (REQUIRED for PDF processing)
 PDF_SERVICES_CLIENT_ID=your_client_id
@@ -58,7 +60,7 @@ FRONTEND_ORIGIN=http://localhost:5173
 
 # Vision (optional, for lazy figure analysis at query time)
 GOOGLE_API_KEY=your-google-key-here
-VISION_MODEL_NAME=gemini-2.5-flash
+VISION_MODEL_NAME=gemini-3.1-flash-lite-preview
 ```
 
 Edit `frontend/.env`:
@@ -236,9 +238,11 @@ python3 ingest_single_file.py  # Single-file ingestion
 capstone-rag-system/
 ├── frontend/
 │   ├── package.json
+│   ├── vite.config.js       # Vite config with PDF.js cMaps
 │   ├── .env.example
 │   └── src/
 │       ├── App.jsx          # React UI
+│       ├── PdfViewer.jsx    # Embedded PDF viewer with highlight overlays
 │       ├── apiClient.js     # API client with base URL config
 │       └── styles.css       # Frontend styling
 ├── requirements.txt
@@ -265,10 +269,12 @@ capstone-rag-system/
 | `RAG_SERVER_PORT` | `8080` | Server port |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed frontend origin(s) for CORS (comma-separated) |
 | `DEBUG_CHUNKS` | `true` | Show retrieved chunks in console |
-| `SIMILARITY_THRESHOLD` | `0.4` | RAG retrieval threshold (0.0-1.0) |
+| `SIMILARITY_THRESHOLD` | `0.3` | RAG retrieval threshold (0.0-1.0, lower = more results) |
 | `RETRIEVAL_K` | `3` | Number of chunks to retrieve per query |
+| `ENABLE_QUERY_REWRITE` | `true` | LLM rewrites questions into optimized search queries before retrieval |
 | `ENABLE_VISION_INGESTION` | `false` | Call Gemini Vision during PDF ingestion |
-| `VISION_MODEL_NAME` | `gemini-2.5-flash` | Gemini model for Vision API calls |
+| `GEMINI_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for chat generation |
+| `VISION_MODEL_NAME` | `gemini-3.1-flash-lite-preview` | Gemini model for Vision API calls |
 | `PDF_SERVICES_CLIENT_ID` | - | Adobe API client ID |
 | `PDF_SERVICES_CLIENT_SECRET` | - | Adobe API client secret |
 | `GOOGLE_API_KEY` | - | Gemini API key (for Vision + LLM) |
@@ -279,6 +285,25 @@ capstone-rag-system/
 |----------|---------|-------------|
 | `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API base URL |
 
+## PDF Reference Highlighting
+
+When the RAG retrieves sources to answer a question, you can see exactly where each reference appears in the original PDF document.
+
+### How It Works
+
+1. **Bounding boxes preserved**: Adobe PDF Extract provides spatial coordinates for every text, table, and figure element. These are stored alongside the chunk content in ChromaDB.
+2. **Embedded PDF viewer**: Click any citation `[1]`, `[2]` in a chat response, or click a PDF document in the sidebar, to open the built-in PDF viewer.
+3. **Color-coded highlights**: All retrieved sources are shown as semi-transparent overlays on the PDF page. Each citation gets a unique color.
+4. **Focus on click**: All highlights appear dimly by default. Clicking a specific citation focuses and prominently highlights that source region.
+5. **Quick page navigation**: Source page buttons in the toolbar let you jump between pages that contain cited content.
+
+### Requirements
+
+- Documents must be re-ingested after upgrading to store bounding box metadata.
+- Only PDF documents support highlighting (TXT files do not have spatial coordinates).
+
+---
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -287,6 +312,8 @@ capstone-rag-system/
 | `/api/chat` | POST | Send message, get response |
 | `/api/upload` | POST | Upload and ingest a document |
 | `/api/documents` | GET | List ingested documents |
+| `/api/documents/<name>/file` | GET | Serve original document file (PDF viewer) |
+| `/api/figures/<filename>` | GET | Serve extracted figure image |
 | `/api/reset-db` | POST | Reset vector database |
 | `/api/clear` | POST | Clear conversation history |
 | `/api/health` | GET | Health check |

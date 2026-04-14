@@ -1,20 +1,85 @@
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { 
-  Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle, 
-  CheckCircle, Info, Bot, User, FileText, Loader2, File
+import React, { Children, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  Send, UploadCloud, Trash2, RefreshCw, X, AlertCircle,
+  CheckCircle, Info, Bot, User, FileText, Loader2, File,
+  Image, ZoomIn, BookOpen, Copy, Check, RotateCw
 } from "lucide-react";
 import { API_BASE_URL, apiGet, apiPost, apiUpload } from "./apiClient";
+const PdfViewer = lazy(() => import("./PdfViewer"));
 
+function useDarkMode() {
+  const [isDark, setIsDark] = useState(() => {
+    return localStorage.getItem("theme") === "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+  }, [isDark]);
+
+  return [isDark, setIsDark];
+}
 const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
-const WELCOME_TEXT = "Hello! Ask questions about your ingested documents.";
+const WELCOME_TEXT = "Hello! Please insert a document and ask questions about its content.";
 
-function createMessage(role, content, sources = []) {
+const STORAGE_KEY_SESSION = "rag_session_id";
+const STORAGE_KEY_MESSAGES = "rag_messages";
+const STORAGE_VERSION_KEY = "rag_storage_version";
+const STORAGE_VERSION = "3";
+
+(function migrateStorage() {
+  if (sessionStorage.getItem(STORAGE_VERSION_KEY) !== STORAGE_VERSION) {
+    console.log("[storage] version mismatch, clearing stale data");
+    sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
+    sessionStorage.removeItem(STORAGE_KEY_SESSION);
+    sessionStorage.setItem(STORAGE_VERSION_KEY, STORAGE_VERSION);
+  }
+})();
+
+function loadStoredSession() {
+  const stored = sessionStorage.getItem(STORAGE_KEY_SESSION);
+  if (stored) return stored;
+  const fresh = createSessionId();
+  sessionStorage.setItem(STORAGE_KEY_SESSION, fresh);
+  return fresh;
+}
+
+function loadStoredMessages() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY_MESSAGES);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch (e) {
+    console.error("[storage] failed to parse stored messages, clearing:", e);
+    sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
+  }
+  return null;
+}
+
+function saveMessages(messages) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(messages));
+  } catch (e) {
+    console.error("[storage] failed to save messages:", e);
+  }
+}
+
+function clearStoredChat() {
+  sessionStorage.removeItem(STORAGE_KEY_SESSION);
+  sessionStorage.removeItem(STORAGE_KEY_MESSAGES);
+}
+
+function createMessage(role, content, sources = [], extra = {}) {
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
     role,
-    content,
-    sources
+    content: typeof content === "string" ? content : JSON.stringify(content),
+    sources,
+    ...extra
   };
 }
 
@@ -33,13 +98,154 @@ function getFileExtension(filename) {
   return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : "";
 }
 
+function buildImageUrl(imageUrl) {
+  if (!imageUrl) return null;
+  return `${API_BASE_URL}${imageUrl}`;
+}
+
+function buildFigureMap(sources) {
+  const map = {};
+  if (!sources) return map;
+  for (const s of sources) {
+    if (s.image_url) {
+      map[s.id] = buildImageUrl(s.image_url);
+    }
+  }
+  return map;
+}
+
+const CITATION_RE = /\[(\d+)\]/g;
+
+function InlineFigure({ imageUrl, figureId, onImageClick }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="inline-figure-wrapper">
+      <button
+        className="inline-figure-toggle"
+        onClick={() => setCollapsed((c) => !c)}
+        title={collapsed ? "Show figure" : "Hide figure"}
+      >
+        <Image size={11} />
+        {collapsed ? "Show figure" : "Hide figure"}
+      </button>
+      {!collapsed && (
+        <span className="inline-figure" onClick={() => onImageClick(imageUrl)}>
+          <img src={imageUrl} alt={`Figure [${figureId}]`} loading="lazy" />
+          <span className="inline-figure-zoom"><ZoomIn size={14} /></span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function injectCitations(children, figureMap, onImageClick, onCitationClick) {
+  return Children.map(children, (child) => {
+    if (typeof child !== "string") return child;
+
+    const matches = [...child.matchAll(CITATION_RE)];
+    if (matches.length === 0) return child;
+
+    const parts = [];
+    let lastIndex = 0;
+
+    for (const match of matches) {
+      if (match.index > lastIndex) {
+        parts.push(child.slice(lastIndex, match.index));
+      }
+      const citationId = parseInt(match[1], 10);
+      parts.push(
+        <span
+          key={`c${match.index}`}
+          className="citation-ref clickable"
+          onClick={() => onCitationClick?.(citationId)}
+          title="View in PDF"
+        >
+          {match[0]}
+        </span>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < child.length) {
+      parts.push(child.slice(lastIndex));
+    }
+
+    return <>{parts}</>;
+  });
+}
+
+class MessageErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error) {
+    console.error("[MessageContent] render error:", error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return <p className="message-text" style={{ color: "var(--danger-500)" }}>Failed to render this message.</p>;
+    }
+    return this.props.children;
+  }
+}
+
+function MessageContentInner({ text: rawText, sources, onImageClick, onCitationClick, role }) {
+  const text = typeof rawText === "string" ? rawText : String(rawText ?? "");
+  const figureMap = useMemo(() => buildFigureMap(sources), [sources]);
+
+  if (role === "user") {
+    return <p className="message-text">{text}</p>;
+  }
+
+  const mdComponents = useMemo(() => {
+    const hasCitations = sources && sources.length > 0;
+    if (!hasCitations) return {};
+
+    const wrap = (Tag) =>
+      function CitationWrap({ children }) {
+        return <Tag>{injectCitations(children, figureMap, onImageClick, onCitationClick)}</Tag>;
+      };
+
+    return { p: wrap("p"), li: wrap("li"), td: wrap("td") };
+  }, [figureMap, onImageClick, onCitationClick, sources]);
+
+  const figureEntries = useMemo(() => {
+    return Object.entries(figureMap).map(([id, url]) => ({ id: Number(id), url }));
+  }, [figureMap]);
+
+  return (
+    <div className="message-text markdown-body">
+      {figureEntries.map(({ id, url }) => (
+        <InlineFigure key={`fig-${id}`} imageUrl={url} figureId={id} onImageClick={onImageClick} />
+      ))}
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function MessageContent(props) {
+  return (
+    <MessageErrorBoundary>
+      <MessageContentInner {...props} />
+    </MessageErrorBoundary>
+  );
+}
+
 export default function App() {
-  const sessionId = useMemo(createSessionId, []);
+  const sessionId = useMemo(loadStoredSession, []);
+  const [isDark, setIsDark] = useDarkMode();
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const [messages, setMessages] = useState([createMessage("assistant", WELCOME_TEXT)]);
+  const [messages, setMessages] = useState(
+    () => loadStoredMessages() || [createMessage("assistant", WELCOME_TEXT)]
+  );
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
 
@@ -47,6 +253,39 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+
+  // Lightbox for figure images
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+
+  // PDF Viewer state
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerUrl, setPdfViewerUrl] = useState(null);
+  const [pdfViewerSources, setPdfViewerSources] = useState([]);
+  const [pdfFocusedSource, setPdfFocusedSource] = useState(null);
+  const [pdfViewerDocName, setPdfViewerDocName] = useState(null);
+
+  const openPdfViewer = useCallback((docName, sources, focusId) => {
+    const url = `${API_BASE_URL}/api/documents/${encodeURIComponent(docName)}/file`;
+    setPdfViewerUrl(url);
+    setPdfViewerDocName(docName);
+    setPdfViewerSources(sources || []);
+    setPdfFocusedSource(focusId ?? null);
+    setPdfViewerOpen(true);
+    console.log("[pdf-viewer] open", docName, "focus:", focusId);
+  }, []);
+
+  const handleCitationClick = useCallback((sourceId, messageSources) => {
+    if (!messageSources) return;
+    const src = messageSources.find((s) => s.id === sourceId);
+    if (!src?.source) return;
+    const ext = (src.source.split(".").pop() || "").toLowerCase();
+    if (ext !== "pdf") return;
+    openPdfViewer(src.source, messageSources, sourceId);
+  }, [openPdfViewer]);
+
+  const handleHighlightClick = useCallback((sourceId) => {
+    setPdfFocusedSource(sourceId);
+  }, []);
 
   // Toast System
   const [toasts, setToasts] = useState([]);
@@ -90,6 +329,10 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    saveMessages(messages);
+  }, [messages]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -141,7 +384,7 @@ export default function App() {
       console.log("[chat] response received");
     } catch (error) {
       console.error("[chat] failed:", error);
-      appendMessage("error", `Error: ${error.message}`);
+      setMessages((prev) => [...prev, createMessage("error", `Error: ${error.message}`, [], { failedQuestion: question })]);
     } finally {
       setIsSending(false);
     }
@@ -157,6 +400,7 @@ export default function App() {
   async function handleClearChat() {
     try {
       await apiPost("/api/clear", { session_id: sessionId });
+      clearStoredChat();
       setMessages([createMessage("assistant", WELCOME_TEXT)]);
       console.log("[chat] cleared");
       addToast("success", "Chat cleared successfully.");
@@ -216,6 +460,8 @@ export default function App() {
 
     try {
       const result = await apiPost("/api/reset-db");
+      clearStoredChat();
+      setMessages([createMessage("assistant", WELCOME_TEXT)]);
       addToast("success", result.message || "Database cleared.");
       await loadDocuments();
       console.log("[reset] success");
@@ -258,6 +504,32 @@ export default function App() {
     setIsDragActive(false);
   }
 
+  const [copiedId, setCopiedId] = useState(null);
+
+  function handleCopyMessage(messageId, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(messageId);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
+
+  async function handleRetry(errorMessageId, question) {
+    if (isSending) return;
+    setMessages((prev) => prev.filter((m) => m.id !== errorMessageId));
+    setIsSending(true);
+    try {
+      const result = await apiPost("/api/chat", {
+        message: question,
+        session_id: sessionId
+      });
+      appendMessage("assistant", result.answer, result.sources || []);
+    } catch (error) {
+      setMessages((prev) => [...prev, createMessage("error", `Error: ${error.message}`, [], { failedQuestion: question })]);
+    } finally {
+      setIsSending(false);
+    }
+  }
+
   const canSend = inputValue.trim().length > 0 && !isSending;
 
   return (
@@ -271,13 +543,47 @@ export default function App() {
               Intelligent retrieval for academic papers and research data.
             </p>
           </div>
-          <div className="meta-block">
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <button
+              onClick={() => setIsDark(prev => !prev)}
+              title="Toggle dark mode"
+              style={{
+                background: isDark ? "#1e2235" : "#e2e8f0",
+                border: "none",
+                borderRadius: "999px",
+                width: "52px",
+                height: "28px",
+                cursor: "pointer",
+                position: "relative",
+                transition: "background 0.3s ease",
+                flexShrink: 0,
+              }}
+            >
+            <span style={{
+              position: "absolute",
+              top: "3px",
+              left: isDark ? "27px" : "3px",
+              width: "22px",
+              height: "22px",
+              borderRadius: "50%",
+              background: isDark ? "#f0b429" : "#004c9b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "12px",
+              transition: "left 0.3s ease, background 0.3s ease",
+          }}>
+              {isDark ? "🌙" : "☀️"}
+             </span>
+            </button>
+            <div className="meta-block">
             <span className="meta-label">Backend</span>
             <code className="meta-value">{API_BASE_URL}</code>
-          </div>
+            </div>
+            </div>
         </header>
 
-        <main className="layout">
+        <main className={`layout ${pdfViewerOpen ? "with-pdf-viewer" : ""}`}>
           <aside className="side-panel">
             <section className="panel-card">
               <h2>Document Ingestion</h2>
@@ -297,9 +603,15 @@ export default function App() {
                   <UploadCloud className="dropzone-icon" size={32} />
                 )}
                 <span className="dropzone-title">
-                  {isUploading ? "Uploading..." : "Upload Document"}
+                  {isUploading ? "Ingesting document..." : "Upload Document"}
                 </span>
-                <span className="dropzone-hint">Supports .txt and .pdf</span>
+                {isUploading ? (
+                  <div className="upload-progress-bar">
+                    <div className="upload-progress-fill" />
+                  </div>
+                ) : (
+                  <span className="dropzone-hint">Supports .txt and .pdf</span>
+                )}
               </button>
               <input
                 ref={fileInputRef}
@@ -323,7 +635,14 @@ export default function App() {
               ) : (
                 <ul className="doc-list">
                   {documents.map((doc) => (
-                    <li key={doc.name} className="doc-item">
+                    <li
+                      key={doc.name}
+                      className={`doc-item ${doc.type === "pdf" ? "clickable-doc" : ""} ${pdfViewerDocName === doc.name ? "active-doc" : ""}`}
+                      onClick={() => {
+                        if (doc.type === "pdf") openPdfViewer(doc.name, [], null);
+                      }}
+                      title={doc.type === "pdf" ? "Click to view in PDF viewer" : doc.name}
+                    >
                       <div className="doc-name-wrap">
                         <File size={14} className="text-ink-500" />
                         <span className="doc-name" title={doc.name}>{doc.name}</span>
@@ -373,19 +692,48 @@ export default function App() {
                   </div>
                   
                   <article className="message-card">
-                    <p className="message-text">{message.content}</p>
+                    <MessageContent
+                      text={message.content}
+                      sources={message.sources}
+                      onImageClick={setLightboxUrl}
+                      onCitationClick={(srcId) => handleCitationClick(srcId, message.sources)}
+                      role={message.role}
+                    />
                     {message.sources && message.sources.length > 0 ? (
                       <details className="source-box">
                         <summary>References ({message.sources.length})</summary>
                         <ul className="source-list">
                           {message.sources.map((source) => (
                             <li key={`${message.id}_${source.id}`} className="source-item">
-                              <p className="source-title">
-                                <FileText size={14} className="source-icon" />
+                              <p
+                                className="source-title clickable-source"
+                                onClick={() => handleCitationClick(source.id, message.sources)}
+                                title="View in PDF"
+                              >
+                                {source.image_url ? (
+                                  <Image size={14} className="source-icon" />
+                                ) : (
+                                  <FileText size={14} className="source-icon" />
+                                )}
                                 <span className="source-id">[{source.id}]</span>{" "}
                                 {formatSourceLabel(source)}
+                                {source.bounds && (
+                                  <BookOpen size={12} className="source-view-icon" />
+                                )}
                               </p>
-                              {source.preview ? (
+                              {source.image_url ? (
+                                <div
+                                  className="source-thumbnail"
+                                  onClick={() => setLightboxUrl(buildImageUrl(source.image_url))}
+                                >
+                                  <img
+                                    src={buildImageUrl(source.image_url)}
+                                    alt={formatSourceLabel(source)}
+                                    loading="lazy"
+                                  />
+                                  <span className="source-thumbnail-zoom"><ZoomIn size={14} /></span>
+                                </div>
+                              ) : source.preview ? (
                                 <p className="source-preview">{source.preview}</p>
                               ) : null}
                             </li>
@@ -393,6 +741,25 @@ export default function App() {
                         </ul>
                       </details>
                     ) : null}
+                    {message.role === "assistant" && (
+                      <button
+                        className="copy-btn"
+                        onClick={() => handleCopyMessage(message.id, message.content)}
+                        title={copiedId === message.id ? "Copied!" : "Copy message"}
+                      >
+                        {copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                    )}
+                    {message.role === "error" && message.failedQuestion && (
+                      <button
+                        className="retry-btn"
+                        onClick={() => handleRetry(message.id, message.failedQuestion)}
+                        disabled={isSending}
+                      >
+                        <RotateCw size={14} />
+                        Retry
+                      </button>
+                    )}
                   </article>
                 </div>
               ))}
@@ -408,11 +775,17 @@ export default function App() {
                     <Bot size={20} style={{ display: 'none' }} />
                   </div>
                   <article className="message-card">
-                    <p className="message-text loading-line">
-                      <span />
-                      <span />
-                      <span />
-                    </p>
+                    <div className="thinking-indicator">
+                      <div className="thinking-dots">
+                        <span /><span /><span />
+                      </div>
+                      <span className="thinking-label">Thinking</span>
+                    </div>
+                    <div className="skeleton-loader">
+                      <div className="skeleton-line" style={{ width: "90%" }} />
+                      <div className="skeleton-line" style={{ width: "70%" }} />
+                      <div className="skeleton-line" style={{ width: "80%" }} />
+                    </div>
                   </article>
                 </div>
               ) : null}
@@ -430,7 +803,7 @@ export default function App() {
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask a question about your ingested data..."
+                placeholder="What would you like to know?"
                 autoComplete="off"
                 disabled={isSending}
                 rows={1}
@@ -441,6 +814,21 @@ export default function App() {
               </button>
             </form>
           </section>
+
+          {pdfViewerOpen && (
+            <Suspense fallback={<div className="pdf-viewer-loading"><Loader2 size={24} className="animate-spin" /> Loading PDF viewer...</div>}>
+              <PdfViewer
+                pdfUrl={pdfViewerUrl}
+                sources={pdfViewerSources.filter((s) => s.source === pdfViewerDocName)}
+                focusedSource={pdfFocusedSource}
+                onClose={() => {
+                  setPdfViewerOpen(false);
+                  setPdfFocusedSource(null);
+                }}
+                onHighlightClick={handleHighlightClick}
+              />
+            </Suspense>
+          )}
         </main>
 
         <footer className="app-footer">
@@ -495,6 +883,21 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Figure Lightbox */}
+      {lightboxUrl && (
+        <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
+          <button className="lightbox-close" onClick={() => setLightboxUrl(null)}>
+            <X size={24} />
+          </button>
+          <img
+            className="lightbox-image"
+            src={lightboxUrl}
+            alt="Figure"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 

@@ -7,83 +7,46 @@ and stores in ChromaDB. For PDFs, delegates ALL extraction to adobe_ocr.py.
 Chunk Overlap is set to 300 to ensure figure references like "see Figure 2"
 are captured alongside descriptive text.
 
+Noise filtering: text chunks with fewer than MIN_CHUNK_ALNUM_CHARS (default 10)
+alphanumeric characters are skipped (e.g. stray symbols, footnote markers).
+
 Metadata Schema for every chunk:
   - source: filename
   - path: absolute file path
   - chunk_type: 'text' | 'table' | 'figure'
   - page: page number (1-indexed)
   - figure_id: (figures only) e.g. "Figure[1]"
-  - image_path: (figures only) absolute path to .png rendition
+  - image_path: (figures and tables) absolute path to .png rendition
+  - bounds_x_min, bounds_y_min, bounds_x_max, bounds_y_max: PDF coordinate bounds
+    (Adobe coordinate system: origin at bottom-left, Y increases upward)
 """
 
 import os
-from dotenv import load_dotenv
+import re
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from shared import get_embeddings, split_text, SCRIPT_DIR, CHROMA_DIR
 
-# Load environment variables from parent directory
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(parent_dir, ".env")
-load_dotenv(env_path)
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
+MIN_ALNUM_CHARS = int(os.getenv("MIN_CHUNK_ALNUM_CHARS", "10"))
 
 
-def get_embeddings():
-    """
-    Initialize embeddings based on available configuration.
-    Priority: HuggingFace (local) > OpenAI > Google Gemini
-    """
-    use_local = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-
-    if use_local or lmstudio_url:
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        print("[Using Local HuggingFace Embeddings (all-MiniLM-L6-v2)]")
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import OpenAIEmbeddings
-
-        print("[Using OpenAI Embeddings]")
-        return OpenAIEmbeddings(openai_api_key=openai_key)
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-        print("[Using Google Gemini Embeddings]")
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_key,
-        )
-    else:
-        raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, "
-            "OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
+def _is_noise_chunk(text):
+    """Return True if text is too short or has too few alphanumeric chars to be meaningful."""
+    alnum_count = len(re.findall(r'[a-zA-Z0-9]', text))
+    return alnum_count < MIN_ALNUM_CHARS
 
 
-def split_text(text, chunk_size=1000, chunk_overlap=300):
-    """
-    Split text into overlapping chunks with position tracking.
-
-    Overlap of 300 ensures figure references (like 'see Figure 2')
-    are captured alongside descriptive text.
-    """
-    chunks = []
-    start = 0
-    length = len(text)
-
-    while start < length:
-        end = start + chunk_size
-        chunks.append({"text": text[start:end], "start_pos": start})
-        start += chunk_size - chunk_overlap
-
-    return chunks
+def _extract_bounds_metadata(chunk_data):
+    """Extract bounding box fields from chunk data for ChromaDB storage."""
+    bounds = chunk_data.get("bounds", [])
+    if bounds and len(bounds) >= 4:
+        return {
+            "bounds_x_min": float(bounds[0]),
+            "bounds_y_min": float(bounds[1]),
+            "bounds_x_max": float(bounds[2]),
+            "bounds_y_max": float(bounds[3]),
+        }
+    return {}
 
 
 def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
@@ -108,6 +71,7 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
             chunk_type = chunk_data.get("type", "text")
             page_num = chunk_data.get("page", 1)
             content = chunk_data.get("content", "")
+            section_heading = chunk_data.get("section_heading", "")
 
             # ── ZERO-NULL POLICY ──
             if not content or not content.strip():
@@ -124,59 +88,67 @@ def prepare_documents(file_path, chunk_size=1000, chunk_overlap=300):
 
             # ── TEXT: split into sub-chunks ──
             if chunk_type == "text":
+                bounds_meta = _extract_bounds_metadata(chunk_data)
                 text_splits = split_text(content, chunk_size, chunk_overlap)
                 for i, split_dict in enumerate(text_splits):
                     split_content = split_dict["text"].strip()
                     if not split_content:
                         continue
+                    if _is_noise_chunk(split_content):
+                        print(f"  Skipping noise chunk on p.{page_num}: {split_content[:40]!r}")
+                        continue
                     lines_before = content[: split_dict["start_pos"]].count("\n")
+                    meta = {
+                        "source": file_name,
+                        "path": file_path,
+                        "chunk": i,
+                        "page": page_num,
+                        "chunk_type": "text",
+                        "section_heading": section_heading,
+                        "start_line": lines_before + 1,
+                        **bounds_meta,
+                    }
                     documents.append(
-                        Document(
-                            page_content=split_content,
-                            metadata={
-                                "source": file_name,
-                                "path": file_path,
-                                "chunk": i,
-                                "page": page_num,
-                                "chunk_type": "text",
-                                "start_line": lines_before + 1,
-                            },
-                        )
+                        Document(page_content=split_content, metadata=meta)
                     )
 
-            # ── TABLE: single chunk, Markdown ──
+            # ── TABLE: single chunk, Vision-described content + image_path ──
             elif chunk_type == "table":
+                bounds_meta = _extract_bounds_metadata(chunk_data)
+                image_path = chunk_data.get("image_path")
+                meta = {
+                    "source": file_name,
+                    "path": file_path,
+                    "chunk": 0,
+                    "page": page_num,
+                    "chunk_type": "table",
+                    "section_heading": section_heading,
+                    **bounds_meta,
+                }
+                if image_path:
+                    meta["image_path"] = image_path
                 documents.append(
-                    Document(
-                        page_content=content.strip(),
-                        metadata={
-                            "source": file_name,
-                            "path": file_path,
-                            "chunk": 0,
-                            "page": page_num,
-                            "chunk_type": "table",
-                        },
-                    )
+                    Document(page_content=content.strip(), metadata=meta)
                 )
 
             # ── FIGURE: single chunk, hybrid content + image_path ──
             elif chunk_type == "figure":
                 fig_id = chunk_data.get("figure_id", f"Figure_{page_num}")
                 image_path = chunk_data.get("image_path")  # from renditions
-
+                bounds_meta = _extract_bounds_metadata(chunk_data)
+                meta = {
+                    "source": file_name,
+                    "path": file_path,
+                    "chunk": 0,
+                    "page": page_num,
+                    "chunk_type": "figure",
+                    "section_heading": section_heading,
+                    "figure_id": fig_id,
+                    "image_path": image_path,
+                    **bounds_meta,
+                }
                 documents.append(
-                    Document(
-                        page_content=content.strip(),
-                        metadata={
-                            "source": file_name,
-                            "path": file_path,
-                            "chunk": 0,
-                            "page": page_num,
-                            "chunk_type": "figure",
-                            "figure_id": fig_id,
-                            "image_path": image_path,   # for multimodal queries
-                        },
-                    )
+                    Document(page_content=content.strip(), metadata=meta)
                 )
 
         total_chars = sum(

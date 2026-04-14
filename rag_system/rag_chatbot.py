@@ -7,44 +7,74 @@ Requirements:
 - LangChain for RAG pipeline
 - ChromaDB for vector storage
 - Environment variables for LLM configuration
+- Serve extracted figure images via /api/figures/ for frontend display
+- Include image_url in source data for figure chunks
+- Serve original PDF files via /api/documents/<name>/file for PDF viewer
+- Include bounding box coordinates in source data for highlight overlays
+- Agentic query rewriting: LLM rewrites user questions into 1-3 optimized
+  search queries before retrieval, improving recall for vague/multi-part
+  questions and follow-ups that use pronouns
+- Citation demotion: bibliography/reference chunks are deprioritized in
+  retrieval results so actual content sections rank higher
+- Visual retrieval: on-demand Gemini Vision analysis for figure/table
+  images, with hybrid text+BM25 retrieval for document search
 
 Environment Variables:
 - LMSTUDIO_BASE_URL: Local LM Studio server URL
 - OPENAI_API_KEY: OpenAI API key
 - GOOGLE_API_KEY: Google Gemini API key
+- GEMINI_MODEL_NAME: Gemini model for chat generation
+- VISION_MODEL_NAME: Gemini model for vision generation
 - USE_LOCAL_EMBEDDINGS: Use local HuggingFace embeddings
 - RAG_SERVER_HOST: Server host (default: 0.0.0.0)
 - RAG_SERVER_PORT: Server port (default: 8080)
 - FRONTEND_ORIGIN: Allowed frontend origin for CORS (default: http://localhost:5173)
 - DEBUG_CHUNKS: Show retrieved chunks in console (default: true)
+- ENABLE_QUERY_REWRITE: LLM query rewriting before retrieval (default: true)
 - PDF_SERVICES_CLIENT_ID: Adobe PDF Services client ID
 - PDF_SERVICES_CLIENT_SECRET: Adobe PDF Services client secret
-- USE_ADOBE_OCR: Use Adobe PDF Services for OCR (default: false)
 """
 
 import os
-from dotenv import load_dotenv
+import re
+import json
 from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage
-from flask import Flask, request, jsonify
+from langchain_core.documents import Document
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_compress import Compress
+from shared import get_llm, get_embeddings, CHROMA_DIR, DATA_DIR, FIGURES_DIR
 
-# Load environment variables from parent directory
-# (since .env is in project root, not in rag_system folder)
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(parent_dir, '.env')
-load_dotenv(env_path)
+def _extract_text(content):
+    """Normalize LLM response content to a plain string.
+    
+    Newer Gemini models can return a list of content parts instead of a
+    simple string.  This handles both cases.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+        return "\n".join(parts)
+    return str(content)
+
 
 DEBUG_CHUNKS = os.getenv("DEBUG_CHUNKS", "true").lower() == "true"
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "3"))
+ENABLE_QUERY_REWRITE = os.getenv("ENABLE_QUERY_REWRITE", "true").lower() == "true"
+ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 
-print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}]")
+print(f"[Loaded SIMILARITY_THRESHOLD: {SIMILARITY_THRESHOLD}, RETRIEVAL_K: {RETRIEVAL_K}, ENABLE_QUERY_REWRITE: {ENABLE_QUERY_REWRITE}]")
 
-# Resolve runtime directories
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_db")
-DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 ALLOWED_EXTENSIONS = {'.txt', '.pdf'}
 
 # Initialize Flask app (API-only; frontend is separate)
@@ -52,80 +82,9 @@ app = Flask(__name__)
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 allowed_origins = [o.strip() for o in frontend_origin.split(",") if o.strip()]
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+Compress(app)
 print(f"[CORS allowed origins: {allowed_origins}]")
 
-
-def get_llm():
-    """
-    Initialize the LLM based on available configuration.
-    Priority: LM Studio (local) > OpenAI > Google Gemini
-    """
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-    
-    # LM Studio (local, no API key needed)
-    if lmstudio_url:
-        from langchain_openai import ChatOpenAI
-        print(f"[Using LM Studio at {lmstudio_url}]")
-        return ChatOpenAI(
-            base_url=lmstudio_url,
-            api_key="lm-studio",  # LM Studio doesn't need a real key
-            temperature=0.7
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import ChatOpenAI
-        print("[Using OpenAI GPT-3.5-turbo]")
-        return ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            openai_api_key=openai_key
-        )
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        print("[Using Google Gemini 2.5 Flash]")
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.7,
-            google_api_key=google_key
-        )
-    else:
-        raise ValueError(
-            "No LLM configured. Set LMSTUDIO_BASE_URL, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
-
-def get_embeddings():
-    """
-    Initialize embeddings based on available configuration.
-    Priority: HuggingFace (local) > OpenAI > Google Gemini
-    """
-    use_local = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
-    lmstudio_url = os.getenv("LMSTUDIO_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-    
-    # Local embeddings with HuggingFace (free, no API key)
-    if use_local or lmstudio_url:
-        from langchain_huggingface import HuggingFaceEmbeddings
-        print("[Using Local HuggingFace Embeddings (all-MiniLM-L6-v2)]")
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-    elif openai_key and openai_key != "your_openai_api_key_here":
-        from langchain_openai import OpenAIEmbeddings
-        print("[Using OpenAI Embeddings]")
-        return OpenAIEmbeddings(openai_api_key=openai_key)
-    elif google_key and google_key != "your_google_api_key_here":
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        print("[Using Google Gemini Embeddings]")
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_key
-        )
-    else:
-        raise ValueError(
-            "No embeddings configured. Set USE_LOCAL_EMBEDDINGS=true, OPENAI_API_KEY, or GOOGLE_API_KEY in your .env file."
-        )
 
 # Helpers
 def format_docs_with_citations(docs):
@@ -151,6 +110,19 @@ def format_docs_with_citations(docs):
         )
 
     return "\n\n".join(parts)
+
+
+def _build_bounds(meta):
+    """Reconstruct bounds dict from stored metadata fields."""
+    x_min = meta.get("bounds_x_min")
+    if x_min is None:
+        return None
+    return {
+        "x_min": float(x_min),
+        "y_min": float(meta.get("bounds_y_min", 0)),
+        "x_max": float(meta.get("bounds_x_max", 0)),
+        "y_max": float(meta.get("bounds_y_max", 0)),
+    }
 
 
 def build_sources(docs, preview_len=200):
@@ -179,17 +151,25 @@ def build_sources(docs, preview_len=200):
         
         reference = ", ".join(ref_parts) if ref_parts else f"chunk {meta.get('chunk', 'unknown')}"
         
+        image_url = None
+        if chunk_type in ("figure", "table"):
+            image_path = meta.get("image_path", "")
+            if image_path and os.path.isfile(image_path):
+                image_url = f"/api/figures/{os.path.basename(image_path)}"
+
         sources.append({
             "id": i,
             "source": meta.get("source"),
             "path": meta.get("path"),
-            "reference": reference,  # Human-readable reference with chunk type
+            "reference": reference,
             "page": page,
             "line": start_line,
             "chunk": meta.get("chunk"),
             "chunk_type": chunk_type,
             "figure_id": figure_id,
-            "preview": doc.page_content[:preview_len]
+            "image_url": image_url,
+            "preview": doc.page_content[:preview_len],
+            "bounds": _build_bounds(meta),
         })
     return sources
 
@@ -204,14 +184,66 @@ vectordb = Chroma(
     collection_metadata={"hnsw:space": "cosine"}
 )
 
-# Create a retriever from the vector database
-retriever = vectordb.as_retriever(
+# When re-ranking is enabled, fetch more candidates for the cross-encoder to score
+_FETCH_K = RETRIEVAL_K * 3 if ENABLE_RERANKING else RETRIEVAL_K
+
+# Create vector retriever
+vector_retriever = vectordb.as_retriever(
     search_type="similarity_score_threshold",
     search_kwargs={
-        "k": RETRIEVAL_K,
+        "k": _FETCH_K,
         "score_threshold": SIMILARITY_THRESHOLD
     }
 )
+
+
+def _build_bm25_retriever():
+    """Build a BM25 keyword retriever from all documents in ChromaDB."""
+    try:
+        collection = vectordb._collection
+        result = collection.get(include=["documents", "metadatas"])
+        if not result["ids"]:
+            return None
+        docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(result["documents"], result["metadatas"])
+            if text and text.strip()
+        ]
+        if not docs:
+            return None
+        bm25 = BM25Retriever.from_documents(docs, k=_FETCH_K)
+        print(f"[BM25] Built keyword index from {len(docs)} documents")
+        return bm25
+    except Exception as e:
+        print(f"[BM25] Failed to build index: {e}")
+        return None
+
+
+def _build_hybrid_retriever():
+    """Combine vector + BM25 into an ensemble retriever."""
+    bm25 = _build_bm25_retriever()
+    if bm25 is None:
+        print("[Hybrid] BM25 unavailable, using vector-only retrieval")
+        return vector_retriever
+    ensemble = EnsembleRetriever(
+        retrievers=[vector_retriever, bm25],
+        weights=[0.6, 0.4]  # 60% semantic, 40% keyword
+    )
+    print("[Hybrid] Ensemble retriever ready (60% semantic + 40% keyword)")
+    return ensemble
+
+
+retriever = _build_hybrid_retriever()
+
+# Cross-encoder re-ranker (loaded once at startup)
+_cross_encoder = None
+if ENABLE_RERANKING:
+    try:
+        from sentence_transformers import CrossEncoder
+        _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        print("[RERANKER] Cross-encoder re-ranking enabled (ms-marco-MiniLM-L-6-v2)")
+    except Exception as e:
+        print(f"[RERANKER] Failed to load cross-encoder: {e}")
 
 # Store conversation history per session (simple in-memory storage)
 # For production, use session management or database
@@ -237,6 +269,149 @@ def get_or_create_session(session_id):
     return sessions[session_id]
 
 
+QUERY_REWRITE_PROMPT = (
+    "You are a search query optimizer for a document retrieval system.\n"
+    "Given a user question and recent chat history, generate 1-3 keyword-based search queries.\n\n"
+    "Rules:\n"
+    "- Output short KEYWORD phrases, NOT full sentences\n"
+    "  Bad: 'What is the abstract of this paper?'\n"
+    "  Good: 'abstract', 'transformer model architecture results'\n"
+    "- Resolve pronouns using chat history (e.g. 'it' -> the specific entity)\n"
+    "- Break multi-part questions into separate keyword queries\n"
+    "- Use words that would actually appear in the document text\n"
+    "- When asking about a section (abstract, introduction, conclusion), include\n"
+    "  the section name as one query and likely content keywords as another\n"
+    "- Output ONLY a JSON array of strings, nothing else\n\n"
+    "Examples:\n"
+    "  'what is in the abstract' -> [\"abstract\", \"propose model architecture results\"]\n"
+    "  'who wrote this' -> [\"authors\", \"university department\"]\n"
+    "  'how was it trained' -> [\"training procedure\", \"optimizer learning rate epochs\"]"
+)
+
+
+def rewrite_query(user_input, chat_history):
+    """
+    Use the LLM to rewrite the user's question into 1-3 optimized search queries.
+    Falls back to the original question on any failure.
+    """
+    recent = []
+    for msg in chat_history[-6:]:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        recent.append(f"{role}: {msg.content[:200]}")
+    history_text = "\n".join(recent) if recent else "(no prior conversation)"
+
+    prompt = f"Chat history:\n{history_text}\n\nUser question: {user_input}"
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content=QUERY_REWRITE_PROMPT),
+            HumanMessage(content=prompt),
+        ])
+        raw = _extract_text(response.content).strip()
+
+        # Strip markdown code fences if the LLM wraps the JSON
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        queries = json.loads(raw)
+        if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+            queries = [q.strip() for q in queries if q.strip()]
+            if queries:
+                print(f"[QUERY REWRITE] {user_input!r} -> {queries}")
+                return queries
+
+        print(f"[QUERY REWRITE] Unexpected format, falling back: {raw[:200]}")
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"[QUERY REWRITE] Failed ({e}), falling back to original query")
+
+    return [user_input]
+
+
+_CITATION_RE = re.compile(
+    r'arXiv\s*(preprint)?|'
+    r'\b\d{4}\.\d{4,5}\b|'
+    r'proceedings\s+of|'
+    r'In\s+(Advances|Proceedings)|'
+    r'\bvol\.\s*\d|'
+    r'\bpp\.\s*\d|'
+    r'IEEE|ACM|ICML|NeurIPS|ICLR|EMNLP|ACL\b|'
+    r'CoRR,\s*abs/',
+    re.IGNORECASE,
+)
+
+
+def _is_citation_chunk(doc):
+    """Detect chunks that are bibliography / reference entries."""
+    text = doc.page_content
+    if len(text) > 500:
+        return False
+    return bool(_CITATION_RE.search(text))
+
+
+def retrieve_with_rewrite(user_input, chat_history):
+    """
+    Rewrite the user query into multiple search queries, run each through
+    the hybrid retriever, deduplicate, and rank by cross-query frequency.
+    Citation/reference chunks are demoted to fill only remaining slots.
+    """
+    if not ENABLE_QUERY_REWRITE:
+        return retriever.invoke(user_input)
+
+    queries = rewrite_query(user_input, chat_history)
+
+    # Collect results from all queries, tracking how often each chunk appears
+    seen = {}  # page_content hash -> (doc, count)
+    for query in queries:
+        docs = retriever.invoke(query)
+        for doc in docs:
+            key = hash(doc.page_content)
+            if key in seen:
+                seen[key] = (seen[key][0], seen[key][1] + 1)
+            else:
+                seen[key] = (doc, 1)
+
+    ranked = sorted(seen.values(), key=lambda pair: pair[1], reverse=True)
+
+    # Cross-encoder re-ranking: score each candidate against the original query
+    if _cross_encoder and ranked:
+        pairs = [[user_input, doc.page_content] for doc, _count in ranked]
+        scores = _cross_encoder.predict(pairs)
+        # Re-sort by cross-encoder score (higher = more relevant)
+        ranked = [
+            (doc, count)
+            for (doc, count), _score in sorted(
+                zip(ranked, scores), key=lambda x: x[1], reverse=True
+            )
+        ]
+        print(f"[RERANKER] Re-ranked {len(ranked)} candidates (top score: {max(scores):.3f})")
+
+    # Partition into priority tiers: figures/tables > content > citations
+    priority_docs = []
+    content_docs = []
+    citation_docs = []
+    for doc, count in ranked:
+        chunk_type = (doc.metadata or {}).get("chunk_type")
+        if chunk_type in ("figure", "table"):
+            priority_docs.append((doc, count))
+        elif _is_citation_chunk(doc):
+            citation_docs.append((doc, count))
+        else:
+            content_docs.append((doc, count))
+
+    max_results = RETRIEVAL_K * 2
+    results = [doc for doc, _c in priority_docs]
+    remaining = max_results - len(results)
+    results.extend(doc for doc, _c in content_docs[:remaining])
+    remaining = max_results - len(results)
+    if remaining > 0:
+        results.extend(doc for doc, _c in citation_docs[:remaining])
+
+    pri_count = len(priority_docs)
+    cit_count = len(citation_docs)
+    print(f"[MULTI-QUERY] {len(queries)} queries -> {sum(c for _, c in ranked)} raw hits -> {len(results)} unique chunks (cap {max_results}, {pri_count} figures/tables prioritized, {cit_count} citations demoted)")
+    return results
+
+
 def process_query(user_input, session_id="default"):
     """
     Process a user query and return the response with sources.
@@ -246,16 +421,8 @@ def process_query(user_input, session_id="default"):
     
     chat_history = get_or_create_session(session_id)
 
-    # Check if vector database is available
-    if retriever is None:
-        return {
-            "answer": "No documents have been ingested yet. Please upload a document first.",
-            "sources": [],
-            "chunks_retrieved": 0
-        }
-
-    # Retrieve relevant chunks from vector database
-    relevant_docs = retriever.invoke(user_input)
+    # Retrieve relevant chunks (with optional LLM query rewriting)
+    relevant_docs = retrieve_with_rewrite(user_input, chat_history)
 
     if not relevant_docs:
         return {
@@ -364,7 +531,7 @@ def process_query(user_input, session_id="default"):
             print(f"\nTEXT PATH: No figure images - standard LLM query")
         rag_prompt = HumanMessage(content=rag_prompt_text)
         response = llm.invoke(chat_history + [rag_prompt])
-        response_text = response.content
+        response_text = _extract_text(response.content)
 
     # Update chat history
     chat_history.append(HumanMessage(content=user_input))
@@ -459,7 +626,7 @@ def _query_gemini_vision(prompt_text, images, chat_history):
             print(f"  Warning: Failed to process image {img_data['figure_id']}: {e}")
     
     # Generate response with automatic model fallback on 429
-    vision_model = os.getenv("VISION_MODEL_NAME", "gemini-2.5-flash")
+    vision_model = os.getenv("VISION_MODEL_NAME", "gemini-3.1-flash-lite-preview")
     fallback_model = "gemini-1.5-flash"
     models = [vision_model, fallback_model]
     for model_name in models:
@@ -539,6 +706,25 @@ def health_check():
     })
 
 
+@app.route('/api/figures/<path:filename>', methods=['GET'])
+def serve_figure(filename):
+    """Serve extracted figure images from the assets/figures directory."""
+    safe_name = os.path.basename(filename)
+    if not os.path.isfile(os.path.join(FIGURES_DIR, safe_name)):
+        return jsonify({"error": "Figure not found"}), 404
+    return send_from_directory(FIGURES_DIR, safe_name)
+
+
+@app.route('/api/documents/<path:filename>/file', methods=['GET'])
+def serve_document_file(filename):
+    """Serve an original document file (PDF/TXT) for the frontend PDF viewer."""
+    safe_name = os.path.basename(filename)
+    file_path = os.path.join(DATA_DIR, safe_name)
+    if not os.path.isfile(file_path):
+        return jsonify({"error": "Document not found"}), 404
+    return send_from_directory(DATA_DIR, safe_name)
+
+
 @app.route('/api/upload', methods=['POST'])
 def upload_document():
     """Upload a document and ingest it into the vector database."""
@@ -588,6 +774,10 @@ def upload_document():
             batch = documents[i:i + BATCH_SIZE]
             vectordb.add_documents(batch)
             print(f"  -> Added batch {i // BATCH_SIZE + 1} ({len(batch)} chunks)")
+
+        # Rebuild hybrid retriever to include new documents in BM25 index
+        global retriever
+        retriever = _build_hybrid_retriever()
 
         print(f"[UPLOAD] Successfully ingested: {filename} ({len(documents)} chunks)")
         return jsonify({
@@ -656,27 +846,14 @@ def reset_database():
     if errors:
         return jsonify({"error": "; ".join(errors)}), 500
 
+    # Rebuild hybrid retriever (BM25 index is now empty)
+    global retriever
+    retriever = _build_hybrid_retriever()
+
     return jsonify({
         "status": "success",
         "message": "Database and uploaded documents cleared successfully."
     })
-
-
-def _reload_vectordb():
-    """Reload the vector database to pick up newly ingested documents."""
-    global vectordb, retriever
-    vectordb = Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=embeddings,
-        collection_metadata={"hnsw:space": "cosine"}
-    )
-    retriever = vectordb.as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={
-            "k": RETRIEVAL_K,
-            "score_threshold": SIMILARITY_THRESHOLD
-        }
-    )
 
 
 def chat_cli():
@@ -707,6 +884,26 @@ def chat_cli():
                     f"[{s['id']}] {s['source']} ({s['reference']}) | {s['path']}"
                 )
             print()
+
+
+@app.route("/api/debug/search", methods=["GET"])
+def debug_search():
+    """Debug endpoint: raw ChromaDB similarity search with scores."""
+    query = request.args.get("q", "abstract")
+    k = int(request.args.get("k", "10"))
+    results = vectordb.similarity_search_with_relevance_scores(query, k=k)
+    output = []
+    for doc, score in results:
+        output.append({
+            "score": round(score, 4),
+            "chunk_type": doc.metadata.get("chunk_type", "?"),
+            "page": doc.metadata.get("page", "?"),
+            "preview": doc.page_content[:150],
+        })
+    print(f"\n[DEBUG SEARCH] q={query!r} k={k}")
+    for i, item in enumerate(output):
+        print(f"  {i+1}. score={item['score']} type={item['chunk_type']} p.{item['page']}: {item['preview'][:80]}")
+    return jsonify(output)
 
 
 def run_server():
